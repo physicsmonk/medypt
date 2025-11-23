@@ -21,25 +21,27 @@ import utils
 class IMTModel(model.ModelBase):
     """Class for simulating mesoscopic dynamics of insulator-metal transitions in materials.
 
-    The fields are:
+    The sub-fields are:
 
-    - 'op': Order parameter (vector field)
-    - 'u': Displacement (vector field)
-    - 'ge': Reduced chemical potential for electrons (scalar field). Equivalent to specifying electron density.
-    - 'gh': Reduced chemical potential for holes (scalar field). Equivalent to specifying hole density.
-    - 'phi': Electrical potential (scalar field)
-    - 'T': Temperature (scalar field)
-    - 'j0': Helper constant field representing the *average* outward current density on the boundary tagged by 0. Boundary
-      current is `j0` multiplied by the area of the boundary. If you need to use boundary current in defining 
+    * ``op``: Order parameter (vector field)
+    * ``u``: Displacement (vector field)
+    * ``ge``: Reduced chemical potential for electrons (scalar field). Equivalent to specifying electron density.
+      For definition, see the note in :meth:`IMTModel.create_problem`.
+    * ``gh``: Reduced chemical potential for holes (scalar field). Equivalent to specifying hole density. For definition,
+      see the note in :meth:`IMTModel.create_problem`.
+    * ``phi``: Electrical potential (scalar field)
+    * ``T``: Temperature (scalar field)
+    * ``j0``: Helper constant field representing the *average* outward current density on the boundary tagged by 0. Boundary
+      current is ``j0`` multiplied by the area of the boundary. If you need to use boundary current in defining 
       your problem, make sure to tag the corresponding boundary with 0 in the mesh. This field only involves 
       negligible overhead if not used.
 
     Units used in this class are:
 
-    - Length: nm
-    - Time: ns
-    - Energy: eV (temperature absorbs the Boltzmann constant and is also in this unit)
-    - Charge: e (positive elementary charge)
+    * Length: nm
+    * Time: ns
+    * Energy: eV (temperature absorbs the Boltzmann constant and is also in this unit)
+    * Charge: e (positive elementary charge)
     """
     def __init__(self):
         """Initialize the parameters, options, and field names.
@@ -61,16 +63,29 @@ class IMTModel(model.ModelBase):
         } # Physical parameter dictionary
         self._field_idx = {"op": 0, "u": 1, "ge": 2, "gh": 3, "phi": 4, "T": 5} # Indices must start from 0 and be continuous
 
-    def create_fields(self, comm: MPI.Comm, op_dim: int, mesh: gmsh.model | str, mesh_dim: int = 3, rank: int = 0, mesh_name: str = "mesh"):
+    def create_fields(
+            self, 
+            comm: MPI.Comm, 
+            op_dim: int, 
+            mesh: gmsh.model | str, 
+            mesh_dim: int = 3, 
+            rank: int = 0, 
+            mesh_name: str = "mesh"
+        ):
         """Generate the function space and fields.
 
-        Args:
-            comm: MPI communicator.
-            op_dim: Dimension of the 1D order-parameter array.
-            mesh: Gmsh model or a file name with the `.msh` or `.xdmf` format.
-            mesh_dim: Geometric dimension of the mesh.
-            rank: Rank of the MPI process (used for generating from gmsh model or reading from `.msh` files).
-            mesh_name: Name (identifier) of the mesh to read from the `.xdmf` file.
+        :param comm: MPI communicator.
+        :type comm: MPI.Comm
+        :param op_dim: Dimension of the 1D order-parameter array.
+        :type op_dim: int
+        :param mesh: Gmsh model or a file name with the ``.msh`` or ``.xdmf`` format.
+        :type mesh: gmsh.model | str
+        :param mesh_dim: Geometric dimension of the mesh.
+        :type mesh_dim: int
+        :param rank: Rank of the MPI process (used for generating from gmsh model or reading from ``.msh`` files).
+        :type rank: int
+        :param mesh_name: Name (identifier) of the mesh to read from the ``.xdmf`` file.
+        :type mesh_name: str
         """
         self.mesh_data = utils.create_mesh(comm, mesh, mesh_dim, rank=rank, mesh_name=mesh_name)
 
@@ -118,13 +133,13 @@ class IMTModel(model.ModelBase):
 
         self.field = fem.Function(FS, name="fields", dtype=default_real_type) # Function object stores the function space
         subfs_ufl = ufl.split(self.field) # Tuple containing ufl representations of sub-functions for defining variational forms
-        subfs = self.field.split()
+        self._sub_fields_tup = self.field.split()
         j0 = fem.Function(FS_R, name="j0", dtype=default_real_type) # Helper field for average boundary current density
         self.sub_fields_ufl = {"j0": j0}
         self.sub_fields = {"j0": j0}
         for name, idx in self._field_idx.items():
             self.sub_fields_ufl[name] = subfs_ufl[idx]
-            self.sub_fields[name] = subfs[idx]
+            self.sub_fields[name] = self._sub_fields_tup[idx]
         self.field_pre = fem.Function(FS) # For storing previous time-step fields
         # No need to save dx and ds as class attributes because the call operator will return a new, reconstructed Measure object each time.
 
@@ -137,24 +152,30 @@ class IMTModel(model.ModelBase):
         ):
         """Generate the finite element problem.
 
-        Args:
-            intrinsic_f: Function returning the intrinsic free energy density, with a calling signature `intrinsic_f(T, op, dop)`, 
-                where `op` is treated as a 1D array and `dop` is the gradient of `op` treated as a 2D array with a
-                shape (`op_dim`, `mesh_dim`).
-            trans_strn: Function returning the eigenstrain in Voigt notation, with a calling signature `trans_strn(op)`.
-            charge_gap: Function returning the energy gap, with a calling signature `charge_gap(op)`.
-            gap_center: Function returning the center of the gap measured from a fixed energy level (reference level), 
-                with a calling signature `gap_center(op)`. The default is returning zero.
+        :param intrinsic_f: Callable returning the intrinsic free energy density, with a calling signature ``intrinsic_f(T, op, dop)``, 
+            where ``op`` is treated as a 1D array and ``dop`` is the gradient of ``op`` treated as a 2D array with a
+            shape ``(op_dim, mesh_dim)``.
+        :type intrinsic_f: Callable[[Any, Any, Any], Any]
+        :param trans_strn: Callable returning the eigenstrain in Voigt notation, with a calling signature ``trans_strn(op)``.
+        :type trans_strn: Callable[[Any], Any]
+        :param charge_gap: Callable returning the energy gap, with a calling signature ``charge_gap(op)``.
+        :type charge_gap: Callable[[Any], Any]
+        :param gap_center: Callable returning the center of the gap measured from a fixed energy level (reference level), 
+            with a calling signature ``gap_center(op)``. The default is returning zero.
+        :type gap_center: Callable[[Any], Any], optional
+        :returns: None
 
-        Note:
-            `ge` = (mu_e - `charge_gap(op)` / 2 - `gap_center(op)` + e * `phi`) / `T`, 
-            `gh` = (mu_h - `charge_gap(op)` / 2 + `gap_center(op)` - e * `phi`) / `T`, 
-            where mu_e and mu_h are the electron and hole quasi-chemical potentials, respectively. The chemical potential and the
-            electronic energy (including the electrostatic energy) share the same reference level E_ref which will cancel out. 
-            The expressions of `ge` and `gh` imply that `phi` = 0 corresponds to the intrinsic situation free of electrostatic influence,
-            i.e., the system is moved infinitely far away from any charges. This means that the reference point of `phi` itself can
-            be considered to be the infinitly far point away from the system (the most common choice in electrodynamics), regardless 
-            of the choice of E_ref. Hence the grounded boundary condition corresponds to `phi` = 0 as usual.
+        ----
+        Note
+        ----
+        ``ge`` = (mu_e - ``charge_gap(op)`` / 2 - ``gap_center(op)`` + e ``phi``) / ``T``, 
+        ``gh`` = (mu_h - ``charge_gap(op)`` / 2 + ``gap_center(op)`` - e ``phi``) / ``T``, 
+        where mu_e and mu_h are the electron and hole quasi-chemical potentials, respectively. The chemical potential and the
+        electronic energy (including the electrostatic energy) share the same reference level E_ref which will cancel out. 
+        The expressions of ``ge`` and ``gh`` imply that ``phi`` = 0 corresponds to the intrinsic situation free of electrostatic influence,
+        i.e., the system is moved infinitely far away from any charges. This means that the reference point of ``phi`` itself can
+        be considered to be the infinitly far point away from the system (the most common choice in electrodynamics), regardless 
+        of the choice of E_ref. Hence the grounded boundary condition corresponds to ``phi`` = 0 as usual.
         """
         # self.fint = intr_f
         # self.Eg = charge_gap
@@ -285,7 +306,7 @@ class IMTModel(model.ModelBase):
                                         + (stress[1] - stress[2]) * (stress[1] - stress[2]) 
                                         + (stress[2] - stress[0]) * (stress[2] - stress[0]) ) 
                                  + 3.0 * (stress[3] * stress[3] + stress[4] * stress[4] + stress[5] * stress[5]))
-        self.exprs2save = {
+        self._exprs2save = {
             # DOLFINx now supports saving vector functions with arbitrary dimension; 
             # see https://fenicsproject.discourse.group/t/saving-vector-function-with-length-greater-than-the-geometrical-dimension/14752
             "op": "op",
@@ -298,7 +319,7 @@ class IMTModel(model.ModelBase):
         }
         vol = self.mesh_data.mesh.comm.allreduce(fem.assemble_scalar(fem.form(fem.Constant(self.mesh_data.mesh, default_real_type(1.0)) * dx)), op=MPI.SUM)
         s0 = self.mesh_data.mesh.comm.allreduce(fem.assemble_scalar(fem.form(fem.Constant(self.mesh_data.mesh, default_real_type(1.0)) * ds(0))), op=MPI.SUM)
-        self.monitor = {
+        self._monitor = {
             "eop_avg": fem.form(ufl.sqrt(op[0] * op[0] + op[1] * op[1] + op[2] * op[2] + op[3] * op[3]) / vol * dx),
             "sop_avg": fem.form(ufl.sqrt(op[4] * op[4] + op[5] * op[5] + op[6] * op[6] + op[7] * op[7]) / vol * dx),
             "Eg_avg": fem.form(Eg / vol * dx),

@@ -18,17 +18,33 @@ from dolfinx.io import XDMFFile
 from dolfinx.io import gmsh as gmshio
 
 # Copied from https://docs.fenicsproject.org/dolfinx/main/python/demos/demo_gmsh.html and modified.
-def create_mesh(comm: MPI.Comm, model: gmsh.model | str, mesh_dim: int = 3, rank: int = 0, mesh_name: str = "mesh", filename: str | None = None, mode: str = "w"):
+def create_mesh(
+        comm: MPI.Comm, 
+        model: gmsh.model | str, 
+        mesh_dim: int = 3, 
+        rank: int = 0, 
+        mesh_name: str = "mesh", 
+        filename: str | None = None, 
+        mode: str = "w"
+    ) -> gmshio.MeshData:
     """Create a DOLFINx mesh from a Gmsh model and output to file.
 
-    Args:
-        comm: MPI communicator top create the mesh on.
-        model: Gmsh model or name of a file containing the mesh (`.msh` or `.xdmf`).
-        mesh_dim: Geometric dimension of the mesh of the gmsh model or `.msh` file.
-        rank: Rank of the MPI process (used for generating from gmsh model or reading from `.msh` files).
-        mesh_name: Name (identifier) of the mesh to read from the input `.xdmf` file and to add to the output file.
-        filename: XDMF filename for writing. Default to `None` for not writing to XDMF file.
-        mode: XDMF file mode. "w" (write) or "a" (append).
+    :param comm: MPI communicator top create the mesh on.
+    :type comm: Comm
+    :param model: Gmsh model or name of a file containing the mesh (``.msh`` or ``.xdmf``).
+    :type model: gmsh.model | str
+    :param mesh_dim: Geometric dimension of the mesh of the gmsh model or ``.msh`` file.
+    :type mesh_dim: int
+    :param rank: Rank of the MPI process (used for generating from gmsh model or reading from ``.msh`` files).
+    :type rank: int
+    :param mesh_name: Name (identifier) of the mesh to read from the input ``.xdmf`` file and to add to the output file.
+    :type mesh_name: str
+    :param filename: XDMF filename for writing. Default to ``None`` for not writing to XDMF file.
+    :type filename: str | None
+    :param mode: XDMF file mode. "w" (write) or "a" (append).
+    :type mode: str
+    :returns: The created :class:`dolfinx.io.gmsh.MeshData`.
+    :rtype: MeshData
     """
     if isinstance(model, gmsh.model):
         mesh_data = gmshio.model_to_mesh(model, comm, rank=rank, gdim=mesh_dim)
@@ -109,13 +125,27 @@ def create_mesh(comm: MPI.Comm, model: gmsh.model | str, mesh_dim: int = 3, rank
                 )
     return mesh_data
 
-def f1_2(x, exp: Callable = ufl.exp):
-    """Approximate analytic expression for Fermi-Dirac integral of order 1/2."""
+def f1_2(x: Any, exp: Callable = ufl.exp) -> Any:
+    """Approximate analytic expression for Fermi-Dirac integral of order 1/2.
+    
+    :param x: Input value.
+    :type x: Any
+    :param exp: Exponential function to use. Default to UFL exponential.
+    :type exp: Callable
+    :returns: Approximated Fermi-Dirac integral of order 1/2 at ``x``.
+    :rtype: Any
+    """
     sqrt_pi = 1.77245385091
     return 1.0 / (exp(-x) + 3.0 * sqrt_pi / 4.0 * (4.0 + x * x) ** (-0.75))
 
-def ufl_mat2voigt4strain(eps):
-    """Convert a UFL strain matrix to Voigt notation (a UFL vector)."""
+def ufl_mat2voigt4strain(eps: Expr) -> Expr:
+    """Convert a UFL strain matrix to Voigt notation (a UFL vector).
+    
+    :param eps: Input strain matrix.
+    :type eps: Expr
+    :returns: Strain in Voigt notation.
+    :rtype: Expr
+    """
     if eps.ufl_shape == (1, 1):
         return ufl.as_vector([eps[0, 0]])
     elif eps.ufl_shape == (2, 2):
@@ -136,8 +166,18 @@ def ufl_mat2voigt4strain(eps):
     else:
         raise ValueError("[ufl_mat2voigt4strain] Input strain matrix must be of shape (1,1), (2,2), or (3,3).")
     
-def young_poisson2stiffness(E: float, nu: float, dim: int):
-    """Convert Young's modulus and Poisson's ratio to stiffness tensor in Voigt notation."""
+def young_poisson2stiffness(E: float, nu: float, dim: int) -> list[list[float]]:
+    """Convert Young's modulus and Poisson's ratio to stiffness tensor in Voigt notation.
+    
+    :param E: Young's modulus.
+    :type E: float
+    :param nu: Poisson's ratio.
+    :type nu: float
+    :param dim: Dimension (1, 2, or 3).
+    :type dim: int
+    :returns: Stiffness tensor in Voigt notation.
+    :rtype: list[list[float]]
+    """
     if dim == 1:
         return [[E]]
     elif dim == 2:
@@ -160,16 +200,40 @@ def young_poisson2stiffness(E: float, nu: float, dim: int):
     else:
         raise ValueError("[young_poisson2stiffness] Dimension must be 1, 2, or 3.")
 
-def relativeL2error(u1: fem.Function, u2: fem.Function, eps: float = 1e-10):
-    """Calculate and return the relative L2 error between two dolfinx Function objects."""
-    n_subspaces = u1.function_space.num_sub_spaces
+def relativeL2error(
+        u1: fem.Function | tuple[fem.Function, ...], 
+        u2: fem.Function | tuple[fem.Function, ...], 
+        eps: float = 1e-10
+    ) -> float:
+    """Calculate and return the relative L2 error between two :class:`dolfinx.fem.Function`.
+    
+    :param u1: First DOLFINx Function or tuple of its sub-functions (views). Also used as the reference for computing the relative error.
+    :type u1: fem.Function | tuple[fem.Function, ...]
+    :param u2: Second DOLFINx Function or tuple of its sub-functions (views). Must have the same type as ``u1``.
+    :type u2: fem.Function | tuple[fem.Function, ...]
+    :param eps: Small value to avoid division by zero.
+    :type eps: float
+    :returns: Relative L2 error between ``u1`` and ``u2``.
+    :rtype: float
+    """
     err = 0.0
-    for i in range(n_subspaces):
-        u1i = u1.sub(i)
-        du = u1i - u2.sub(i)
-        l2_diff = u1.function_space.mesh.comm.allreduce(fem.assemble_scalar(fem.form(ufl.dot(du, du) * ufl.dx)), op=MPI.SUM)
-        l2_u1 = u1.function_space.mesh.comm.allreduce(fem.assemble_scalar(fem.form(ufl.dot(u1i, u1i) * ufl.dx)), op=MPI.SUM)
-        err += l2_diff / (l2_u1 + eps)
+    if isinstance(u1, tuple) and isinstance(u2, tuple):
+        for i, u in enumerate(u1):
+            du = u - u2[i]
+            l2_diff = u.function_space.mesh.comm.allreduce(fem.assemble_scalar(fem.form(ufl.dot(du, du) * ufl.dx)), op=MPI.SUM)
+            l2_u1 = u.function_space.mesh.comm.allreduce(fem.assemble_scalar(fem.form(ufl.dot(u, u) * ufl.dx)), op=MPI.SUM)
+            err += l2_diff / (l2_u1 + eps)
+        n_subspaces = len(u1)
+    elif isinstance(u1, fem.Function) and isinstance(u2, fem.Function):
+        n_subspaces = u1.function_space.num_sub_spaces
+        for i in range(n_subspaces):
+            u1i = u1.sub(i)
+            du = u1i - u2.sub(i)
+            l2_diff = u1.function_space.mesh.comm.allreduce(fem.assemble_scalar(fem.form(ufl.dot(du, du) * ufl.dx)), op=MPI.SUM)
+            l2_u1 = u1.function_space.mesh.comm.allreduce(fem.assemble_scalar(fem.form(ufl.dot(u1i, u1i) * ufl.dx)), op=MPI.SUM)
+            err += l2_diff / (l2_u1 + eps)
+    else:
+        raise TypeError("[relativeL2error] u1 and u2 must be both fem.Function or both tuple of fem.Function.")
     return np.sqrt(err / n_subspaces)
 
 # Copied from http://jsdokken.com/FEniCS23-tutorial/src/approximations.html
@@ -186,13 +250,12 @@ class Projector:
         A = inner(u, v) * dx
         b = inner(function, v) * dx(metadata=metadata)
 
-    Args:
-        function: UFL expression of function to project
-        space: Space to project function into
-        petsc_options: Options to pass to PETSc
-        jit_options: Options to pass to just in time compiler
-        form_compiler_options: Options to pass to the form compiler
-        metadata: Data to pass to the integration measure
+    :param function: UFL expression of function to project
+    :param space: Space to project function into
+    :param petsc_options: Options to pass to PETSc
+    :param jit_options: Options to pass to just in time compiler
+    :param form_compiler_options: Options to pass to the form compiler
+    :param metadata: Data to pass to the integration measure
     """
 
     _A: PETSc.Mat  # The mass matrix
@@ -267,9 +330,6 @@ class Projector:
     def project(self, h: Expr) -> fem.Function:
         """
         Compute projection using a PETSc KSP solver
-
-        Args:
-            assemble_rhs: Re-assemble RHS and re-apply boundary conditions if true
         """
         self.assemble_rhs(h)
         self._ksp.solve(self._b.x.petsc_vec, self._x.x.petsc_vec)
@@ -282,10 +342,15 @@ class Projector:
 class TMat:
     """Class to assemble and store temperature matrix for a given function space and to provide Cholesky 
     decomposition for calculating properly correlated noise out of an uncorrelated noise. The temperature
-    matrix T is defined as: \\int T(x) v_i(x) v_j(x) dx, where T(x) is the temperature field and v_i(x), v_j(x) are
+    matrix T_ij is defined as: ∫ T(x) v_i(x) v_j(x) dx, where T(x) is the temperature field and v_i(x), v_j(x) are
     the basis functions of the function space.
 
     Currently, parallel backward solving for Cholesky factorization through PETSc is only supported by MKL CPARDISO solver.
+
+    :var lumpedT: The lumped temperature matrix (a vector).
+    :vartype lumpedT: PETSc.Vec
+    :var lumpedM: The lumped mass matrix (a vector).
+    :vartype lumpedM: PETSc.Vec
     """
     _formT: fem.Form  # The compiled form for the temperature matrix
     _form_lumpedT: fem.Form  # The compiled form for the lumped temperature matrix
@@ -314,6 +379,16 @@ class TMat:
             metadata: Optional[dict] = None
         ):
         """Attach the temperature field and assemble all the internal data for the first time.
+
+        :param T: Temperature field, represented either as a :class:`dolfinx.fem.Function` or a tuple of its
+            UFL representation and (collapsed) function space.
+        :type T: fem.Function | tuple[FormArgument, fem.FunctionSpace]
+        :param jit_options: Options to pass to just-in-time compiler
+        :type jit_options: Optional[dict]
+        :param form_compiler_options: Options to pass to the form compiler
+        :type form_compiler_options: Optional[dict]
+        :param metadata: Data to pass to the integration measure
+        :type metadata: Optional[dict]
         """
         if isinstance(T, tuple):
             T_ = T[0]
@@ -351,8 +426,8 @@ class TMat:
     def factorT(self, type: str):
         """Assemble and factor the temperature matrix for the attached temperature field with the current value.
 
-        Args:
-            type: Type of factorization. E.g., "cholesky".
+        :param type: Type of factorization. E.g., "cholesky".
+        :type type: str
         """
         assemble_matrix(self._T, self._formT)
         self._T.assemble()
@@ -360,15 +435,20 @@ class TMat:
         self._pcT.setUp() # ensure factorization is formed
 
     def get_factorT(self) -> PETSc.Mat:
-        """Get the factor matrix of the temperature matrix."""
+        """Get the factor matrix of the temperature matrix.
+        
+        :returns: The factor matrix of the temperature matrix.
+        :rtype: PETSc.Mat
+        """
         return self._pcT.getFactorMatrix()
     
     def solve_backwardT(self, b: PETSc.Vec, x: PETSc.Vec):
         """Given the factored temperature matrix T = L U, solve the system U x = b.
 
-        Args:
-            b: Right-hand side vector.
-            x: Solution vector.
+        :param b: Right-hand side vector.
+        :type b: PETSc.Vec
+        :param x: Solution vector.
+        :type x: PETSc.Vec
         """
         L = self._pcT.getFactorMatrix()
         L.solveBackward(b, x)
@@ -376,14 +456,15 @@ class TMat:
     def mat_solveM(self, B: PETSc.Mat, X: PETSc.Mat):
         """Solve the system M X = B, where M is the mass matrix.
 
-        Args:
-            B: Right-hand side matrix.
-            X: Solution matrix.
+        :param B: Right-hand side matrix.
+        :type B: PETSc.Mat
+        :param X: Solution matrix.
+        :type X: PETSc.Mat
         """
         self._kspM.matSolve(B, X)
 
     def assemble_lumpedT(self):
-        """Assemble the lumped temperature matrix for the attached temperature field with the current value."""
+        """Assemble the lumped temperature matrix :attr:`TMat.lumpedT` for the attached temperature field with the current value."""
         # Zeroing is important before re-assembling
         # self.lumpedT.zeroEntries()  # This does not affect ghost entries
         with self.lumpedT.localForm() as local_vec: # Local form includes ghost entries
@@ -413,17 +494,20 @@ def gen_therm_noise(
         noise: fem.Function
     ):
     """Generate thermal noise based on the fluctuation-dissipation theorem.
-    It is calculated as: M w = sqrt(2) A eta L^T, where M is the mass matrix and A, L are the Cholesky factors of the temperature
-    and dissipation matrices, respectively. eta is a matrix of shape (Tmat_dim, dissipUmat_dim) containing
+    It is calculated as: M w = √2 A η L^T, where M is the mass matrix and A, L are the Cholesky factors of the temperature
+    and dissipation matrices, respectively. η is a matrix of shape ``(Tmat_dim, dissipUmat_dim)`` containing
     uncorrelated standard normal random numbers, and w of the same shape is the *DOFs* of the proper thermal noise function.
     Currently only use method of lumped temperature and mass matrices for efficiency.
 
-    Args:
-        Tmat: Assembled TMat (temperature matrix) object.
-        dissipUmat: Upper-triangular Cholesky factor of the dissipation matrix. Can be a scalar for isotropic dissipation.
-        rng: Numpy random number generator.
-        noise: Output noise field. It is the genuine thermal noise multiplied by sqrt(dt) so that it is independent of dt, 
-            where dt is the time step size.
+    :param Tmat: Assembled :class:`TMat` (temperature matrix) object.
+    :type Tmat: TMat
+    :param dissipUmat: Upper-triangular Cholesky factor of the dissipation matrix. Can be a scalar for isotropic dissipation.
+    :type dissipUmat: Any
+    :param rng: Numpy random number generator.
+    :type rng: Generator
+    :param noise: Output noise field. It is the genuine thermal noise multiplied by sqrt(dt) so that it is independent of dt, 
+        where dt is the time step size.
+    :type noise: fem.Function
     """
     mass_dim = noise.function_space.dofmap.index_map.size_local  # Not including ghost dofs
     field_dim = noise.function_space.dofmap.bs

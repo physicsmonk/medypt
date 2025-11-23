@@ -17,7 +17,51 @@ from dolfinx.fem.petsc import NonlinearProblem
 from utils import relativeL2error, TMat, gen_therm_noise
 
 class ModelBase:
-    """Base class for phase-field models
+    """Base class for phase-field models.
+
+    :var params: A dictionary of physical parameters. Initialized to ``None`` and should be set in subclasses.
+    :vartype params: dict[str, Any]
+    :var mesh_data: :class:`dolfinx.io.gmsh.MeshData` object containing mesh and boundary tags. 
+        Initialized to ``None`` and should be set in subclasses.
+    :vartype mesh_data: MeshData
+    :var field: Mixed :class:`dolfinx.fem.Function` object containing all fields. Initialized to 
+        ``None`` and should be set in subclasses.
+    :vartype field: Function
+    :var field_pre: Mixed :class:`dolfinx.fem.Function` object containing all fields at the previous time step. 
+        Initialized to ``None`` and should be set in subclasses.
+    :vartype field_pre: Function
+    :var sub_fields_ufl: A dictionary mapping sub-field names to their UFL representations. 
+        Initialized to ``None`` and should be set in subclasses.
+    :vartype sub_fields_ufl: dict[str, FormArgument]
+    :var sub_fields: A dictionary mapping sub-field names to their :class:`dolfinx.fem.Function` objects 
+        (view to :attr:`ModelBase.field`). Initialized to ``None`` and should be set in subclasses.
+    :vartype sub_fields: dict[str, Function]
+    :var sub_function_spaces: A dictionary mapping sub-field names to their :class:`dolfinx.fem.FunctionSpace` objects
+        (can include both view to the mixed function space and collapsed one). Initialized to ``None`` and should be set in subclasses.
+    :vartype sub_function_spaces: dict[str, FunctionSpace | tuple[FunctionSpace, FunctionSpace]]
+    :var opts: A dictionary of numerical options. Initialized with default values and can be modified in subclasses.
+        Contents include:
+
+        * ``has_thermal_noise`` (bool): Whether to include thermal noise. Default is ``False``.
+        * ``rand_seed`` (int): Random seed for thermal noise generation. Default is ``8347142``.
+        * ``quadr_deg`` (int): Quadrature degree for numerical integration. Default is ``6``.
+        * ``petsc`` (dict): A dictionary of PETSc solver options (see `this`_ for example). Default to use 
+          Newton nonlinear solver with MUMPS direct linear solver.
+        * ``t_step_relative_tol`` (float): Relative tolerance for time discretization error. Default is ``0.01``.
+        * ``dt_min_rescalar`` (float): Minimum factor to reduce time step upon failure. Default is ``0.2``.
+        * ``dt_max_rescalar`` (float): Maximum factor to increase time step upon success. Default is ``4.0``.
+        * ``dt_reducer`` (float): Factor to reduce time step rescalar. Default is ``0.9``.
+        * ``max_successive_fail`` (int): Maximum number of successive failures before stopping. Default is ``100``.
+        * ``min_dt`` (float): Minimum time step size. Default is ``1e-9``.
+        * ``max_dt`` (float): Maximum time step size. Default is ``10.0``.
+        * ``save_period`` (int): Time step period for saving solution. Default is ``1``.
+        * ``log_file_name`` (str): File name for logging evolution. Default is ``evolution.txt``.
+        * ``sol_file_name`` (str): File name for saving solution. Default is ``solution.xdmf``. If the suffix is not ``.xdmf``
+          or if no suffix, save solutions using :class:`dolfinx.io.VTXWriter` into a folder with the given name.
+        * ``verbose`` (bool): Whether to print verbose output. Default is ``False``.
+    :vartype opts: dict[str, Any]
+
+    .. _this: https://jsdokken.com/dolfinx-tutorial/chapter2/nonlinpoisson_code.html#newtons-method
     """
     params: dict[str, Any]
     mesh_data: MeshData
@@ -25,19 +69,20 @@ class ModelBase:
     field_pre: fem.Function
     sub_fields_ufl: dict[str, FormArgument]
     sub_fields: dict[str, fem.Function]
+    _sub_fields_tup: tuple[fem.Function, ...]
     _field_idx: dict[str, int]
-    sub_function_spaces: dict[str, tuple[fem.FunctionSpace, fem.FunctionSpace]]
+    sub_function_spaces: dict[str, fem.FunctionSpace | tuple[fem.FunctionSpace, fem.FunctionSpace]]
     _sub_dof_maps: dict[str, np.ndarray]
     _bcs_natural: list[tuple[int, int, Expr]]
     _bcs_dirichlet: list[fem.DirichletBC]
     _dt: fem.Constant
     _noise: fem.Function
     _problem: NonlinearProblem
-    exprs2save: dict[str, str | tuple[Expr, fem.FunctionSpace]]
-    monitor: dict[str, fem.Form]
+    _exprs2save: dict[str, str | tuple[Expr, fem.FunctionSpace]]
+    _monitor: dict[str, fem.Form]
 
     def __init__(self):
-        """Initialize common attributes (to `None` if that attribute is not supposed to have meaningful value at this moment). 
+        """Initialize common attributes (to ``None`` if that attribute is not supposed to have meaningful value at this moment). 
         """
         self.opts = {
             "has_thermal_noise": False,
@@ -72,6 +117,7 @@ class ModelBase:
         self.field_pre = None
         self.sub_fields_ufl = None
         self.sub_fields = None
+        self._sub_fields_tup = None
         self._field_idx = None
         self.sub_function_spaces = None
         self._sub_dof_maps = None
@@ -80,27 +126,33 @@ class ModelBase:
         self._dt = None
         self._noise = None
         self._problem = None
-        self.exprs2save = None
-        self.monitor = None
+        self._exprs2save = None
+        self._monitor = None
         
     def create_bcs(self, bcs: list[tuple[str, int | Callable[[Any], Any], fem.Constant | fem.Function | np.ndarray | Callable[[Any], Any]]]):
         """Generate boundary conditions.
 
-        Args:
-            bcs: A list of tuples specifying boundary conditions. Each tuple is `(name, b, bc)`: 
-                - `name` (str): The name of the field to which the boundary condition applies.
-                - `b` (int | Callable[[Any], Any]): The tag of or a callable defining the boundary. The tag is only for boundaries with codimension 1.
-                  The callable is only for Dirichlet boundary conditions and will have a calling signature `b(x)`, where `x` is the spatial coordinate treated as a 2D numpy array with shape 
-                  (geom_dim, num_points). It should return a boolean array of shape (num_points,) indicating whether each point is on the boundary.
-                - `bc` (fem.Constant | fem.Function | np.ndarray | Callable[[Any], Any]): A variable or callable defining the boundary condition. A variable is for Dirichlet boundary conditions,
-                  while a callable is for natural boundary conditions. The callable will have a calling signature `bc(fields)`, where `fields` is 
-                  treated as a tuple containing the splitted fields. It covers boundary conditions of the Neumann, Robin, and other general types implemented using the 
-                  Nistche's trick [10.1016/j.camwa.2022.11.025; 10.1103/PhysRevApplied.17.014042]. The default is the zero-flux boundary condition.
+        :param bcs: A list of tuples specifying boundary conditions. Each tuple is ``(name, b, bc)``, where:
 
-        Note:
-            One can make an evolving boundary condition by defining a global Constant/Function object and using it in the 
-            boundary-condition expression. One will then need to define an update function to update the value of the global 
-            object for a given time and pass that function to the `solve` method of this class. 
+            * ``name`` (str): The name of the field to which the boundary condition applies.
+            * ``b`` (int | Callable[[Any], Any]): The tag of or a callable defining the boundary. 
+              The tag is only for boundaries with codimension 1. The callable is only for Dirichlet boundary conditions 
+              and will have a calling signature ``b(x)``, where ``x`` is the spatial coordinate treated as a 2D numpy 
+              array with shape (geom_dim, num_points). It should return a boolean array of shape ``(num_points,)`` 
+              indicating whether each point is on the boundary.
+            * ``bc`` (Constant | Function | ndarray | Callable[[Any], Any]): A variable or callable defining the boundary condition. 
+              A variable is for Dirichlet boundary conditions, while a callable is for natural boundary conditions. The callable 
+              will have a calling signature ``bc(fields)``, where ``fields`` is treated as a tuple containing the splitted fields. 
+              It covers boundary conditions of the Neumann, Robin, and other general types implemented using the Nistche's trick 
+              [10.1016/j.camwa.2022.11.025; 10.1103/PhysRevApplied.17.014042]. The default is the zero-flux boundary condition.
+        :type bcs: list[tuple[str, int | Callable[[Any], Any], Constant | Function | ndarray | Callable[[Any], Any]]]
+
+        .. tip::
+
+            One can make an evolving boundary condition by defining a global :class:`dolfinx.fem.Constant` or 
+            :class:`dolfinx.fem.Function` object and using it in the boundary-condition expression. One will 
+            then need to define an update function to update the value of the global object for a given time 
+            and pass that function to :meth:`ModelBase.solve`.
         """
         facet_dim = self.mesh_data.mesh.topology.dim - 1
         self._bcs_natural = []
@@ -119,23 +171,29 @@ class ModelBase:
                     raise ValueError("[ModelBase.create_bcs] Natural boundary conditions cannot be defined on boundaries specified by callables.")
                 self._bcs_natural.append((self._field_idx[name], tag, bc(self.sub_fields_ufl)))
 
-    def solve(self, tspan: float, dt: float | None = None, ics: dict[str, Callable[[Any], Any] | fem.Function] | None = None, 
-              update: Callable[[float], None] = lambda t: None) -> bool:
+    def solve(
+            self, 
+            tspan: float, dt: float | None = None, 
+            ics: dict[str, Callable[[Any], Any] | fem.Function] | None = None, 
+            update: Callable[[float], None] = lambda t: None
+        ) -> bool:
         """Solve the time-dependent finite-element problem.
 
-        Args:
-            tspan (float): Time span to solve over.
-            dt (float | None, optional): Initial time step. Defaults to None to use the current time step.
-            ics (dict[str, Callable[[Any], Any] | Function] | None, optional): Initial conditions, defined as a dictionary mapping 
-                field names to callables that return the initial value for that field. The callables have a calling 
-                signature `ic(x)`, where `x` is the spatial coordinate treated as a 2D numpy array with shape 
-                (geom_dim, num_points). Defaults to None to use the current values of the fields.
-            update (Callable[[float], None], optional): A function to update any time-dependent parameters (must be defined
-                a priori as global DOLFINx Constant/Function objects) at each time step. It takes the current time as an 
-                argument. Defaults to a no-op function.
-
-        Returns:
-            bool: True if the solve completed successfully, False otherwise.
+        :param tspan: Time span to solve over.
+        :type tspan: float
+        :param dt: Initial time step. Defaults to ``None`` to use the current time step.
+        :type dt: float | None
+        :param ics: Initial conditions, defined as a dictionary mapping field names to callables that return 
+            the initial value for that field. The callables have a calling signature ``ic(x)``, where ``x`` 
+            is the spatial coordinate treated as a 2D numpy array with shape ``(geom_dim, num_points)``. 
+            Defaults to ``None`` to use the current values of the fields.
+        :type ics: dict[str, Callable[[Any], Any] | Function] | None
+        :param update: A callable to update any time-dependent parameters (must be defined a priori as global 
+            :class:`dolfinx.fem.Constant` or :class:`dolfinx.fem.Function`) at each time step. It takes the 
+            current time as the only argument. Defaults to a no-op function.
+        :type update: Callable[[float], None]
+        :returns: True if the solve completed successfully, False otherwise.
+        :rtype: bool
         """
         if dt is not None:
             self._dt.value = dt
@@ -157,6 +215,7 @@ class ModelBase:
         n_step = 0
         t = 0.0
         u2acc = fem.Function(self.field.function_space)
+        u2acc_subs = u2acc.split()
         dudt0 = fem.Function(self.field.function_space)
         log_file = open(self.opts["log_file_name"], 'w')
         folder = Path(self.opts["sol_file_name"])
@@ -182,7 +241,7 @@ class ModelBase:
         # Prepare Function objects for saving the solution
         compiled_sols = {}
         funcs2save = {}  # Dictionary containing Functions for saving algebraic expressions of dolfinx Functions
-        for key, expr in self.exprs2save.items():
+        for key, expr in self._exprs2save.items():
             if isinstance(expr, str):  
                 # Generate a fresh Function object for saving to file; 
                 # see https://fenicsproject.discourse.group/t/typeerror-boundingboxtree-init-takes-2-positional-arguments-but-3-were-given/12825
@@ -271,7 +330,7 @@ class ModelBase:
 
         if p_rank == 0:
             log_file.write("          #Step            Time       Time step   Stepping fail       SNES fail        KSP fail ")
-            for key in self.monitor:
+            for key in self._monitor:
                 log_file.write(f"{key:>15} ")
             log_file.write("\n")
             log_file.flush()
@@ -318,7 +377,7 @@ class ModelBase:
                 # Compute the second-order accurate estimate of the solution; the current solution u is first-order accurate (backward Euler)
                 u2acc.x.array[:] = self.field_pre.x.array + (dudt0.x.array * self._dt.value + self.field.x.array - self.field_pre.x.array) * 0.5
                 # Calculate the backward Euler time integration error and time step changing factor
-                rel_err = relativeL2error(u2acc, self.field, eps=eps)
+                rel_err = relativeL2error(u2acc_subs, self._sub_fields_tup, eps=eps)
                 dt_factor = min(max(self.opts["dt_reducer"] * np.sqrt(self.opts["t_step_relative_tol"] / max(rel_err, eps)), 
                                     self.opts["dt_min_rescalar"]), self.opts["dt_max_rescalar"])
                 if rel_err > self.opts["t_step_relative_tol"]:
@@ -339,7 +398,7 @@ class ModelBase:
             # Save solution; To visualize in Paraview the solution file that contains multiple Functions,
             # use ExtractBlock filter for the Function to be visualized to avoid wierd behavior.
             if (n_step - 1) % self.opts["save_period"] == 0:
-                for key, expr in self.exprs2save.items():
+                for key, expr in self._exprs2save.items():
                     if isinstance(expr, str):
                         # u4save = u.sub(self.func2save[key]).collapse()   # Shallow copy seems not working properly for saving subfunctions, so use collapse()
                         # u4save.name = key
@@ -385,8 +444,8 @@ class ModelBase:
                 print(f'[ModelBase.solve] Step {n_step}: Completed refinement, dt = {self._dt.value:15.6e}, t = {t:15.6e}', flush=True)
             if p_rank == 0:
                 log_file.write(f"{n_step:15d} {t:15.6e} {self._dt.value:15.6e} {t_fail:15d} {snes_fail:15d} {ksp_fail:15d} ")
-            for key in self.monitor:
-                out = self.mesh_data.mesh.comm.allreduce(fem.assemble_scalar(self.monitor[key]), op=MPI.SUM)
+            for key in self._monitor:
+                out = self.mesh_data.mesh.comm.allreduce(fem.assemble_scalar(self._monitor[key]), op=MPI.SUM)
                 if p_rank == 0:
                     log_file.write(f"{out:15.6e} ")
             if p_rank == 0:

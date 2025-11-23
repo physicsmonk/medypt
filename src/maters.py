@@ -1,6 +1,8 @@
 KB_E = 8.61733326e-5  # k_B / e in SI units
 
 class VO2:
+    """Class defining required callables (see :meth:`IMTModel.create_problem`) for the material VO2.
+    """
     def __init__(self):
         v = 0.059  # nm^3
         self.Tc = 338 * KB_E  # eV
@@ -69,9 +71,14 @@ class VO2:
 
         self.Eg0 = 0.3 # eV
 
-    def fint(self, T, op, dop):
-        """Intrinsic free energy density. `op` has 8 components, with first 4 for electronic order
-        parameters and last 4 for structural order parameters.
+    def intrinsic_f(self, T, op, dop):
+        """Intrinsic free energy density.
+
+        :param T: Temperature in eV.
+        :param op: Order parameters (dimensionless), treated as an 1D array with 8 components. First 4 are electronic order parameters,
+            last 4 are structural order parameters.
+        :param dop: Gradient of order parameters in nm^-1, treated as a 2D array with shape (8, 3).
+        :returns: Free energy density in eV / nm^3.
         """
         f = (
             self.A / 2.0 * (T - self.T1) / self.Tc * (op[0] * op[0] + op[1] * op[1] + op[2] * op[2] + op[3] * op[3])
@@ -131,9 +138,12 @@ class VO2:
 
         return f + g
     
-    def e0(self, op):
-        """Transformation strain in Voigt notation. `op` has 8 components, with first 4 for electronic order
-        parameters and last 4 for structural order parameters.
+    def trans_strn(self, op):
+        """Transformation strain in Voigt notation.
+
+        :param op: Order parameters (dimensionless), treated as an 1D array with 8 components. First 4 are electronic order parameters,
+            last 4 are structural order parameters.
+        :returns: Transformation strain in Voigt notation as a list with 6 components.
         """
         e1 = (
             self.S1 * (op[0] * op[4] + op[1] * op[5] + op[2] * op[6] + op[3] * op[7])
@@ -159,7 +169,11 @@ class VO2:
         )
         return [e1, e2, e3, e4, e5, e6]
     
-    def Eg(self, op):
-        """Charge gap. `op` has 8 components, with first 4 for electronic order parameters.
+    def charge_gap(self, op):
+        """Charge gap.
+
+        :param op: Order parameters (dimensionless), treated as an 1D array with 8 components. First 4 are electronic order parameters,
+            last 4 are structural order parameters.
+        :returns: Charge gap in eV.
         """
         return self.Eg0 * (op[0] * op[0] + op[1] * op[1] + op[2] * op[2] + op[3] * op[3])
