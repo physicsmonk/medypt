@@ -26,19 +26,19 @@ class ModelBase:
     :vartype mesh_data: MeshData
     :var field: Mixed :class:`dolfinx.fem.Function` object containing all fields. Initialized to 
         ``None`` and should be set in subclasses.
-    :vartype field: Function
+    :vartype field: fem.Function
     :var field_pre: Mixed :class:`dolfinx.fem.Function` object containing all fields at the previous time step. 
         Initialized to ``None`` and should be set in subclasses.
-    :vartype field_pre: Function
+    :vartype field_pre: fem.Function
     :var sub_fields_ufl: A dictionary mapping sub-field names to their UFL representations. 
         Initialized to ``None`` and should be set in subclasses.
     :vartype sub_fields_ufl: dict[str, FormArgument]
     :var sub_fields: A dictionary mapping sub-field names to their :class:`dolfinx.fem.Function` objects 
         (view to :attr:`ModelBase.field`). Initialized to ``None`` and should be set in subclasses.
-    :vartype sub_fields: dict[str, Function]
+    :vartype sub_fields: dict[str, fem.Function]
     :var sub_function_spaces: A dictionary mapping sub-field names to their :class:`dolfinx.fem.FunctionSpace` objects
         (can include both view to the mixed function space and collapsed one). Initialized to ``None`` and should be set in subclasses.
-    :vartype sub_function_spaces: dict[str, FunctionSpace | tuple[FunctionSpace, FunctionSpace]]
+    :vartype sub_function_spaces: dict[str, fem.FunctionSpace | tuple[fem.FunctionSpace, fem.FunctionSpace]]
     :var opts: A dictionary of numerical options. Initialized with default values and can be modified in subclasses.
         Contents include:
 
@@ -145,7 +145,7 @@ class ModelBase:
               will have a calling signature ``bc(fields)``, where ``fields`` is treated as a tuple containing the splitted fields. 
               It covers boundary conditions of the Neumann, Robin, and other general types implemented using the Nistche's trick 
               [10.1016/j.camwa.2022.11.025; 10.1103/PhysRevApplied.17.014042]. The default is the zero-flux boundary condition.
-        :type bcs: list[tuple[str, int | Callable[[Any], Any], Constant | Function | ndarray | Callable[[Any], Any]]]
+        :type bcs: list[tuple[str, int | Callable[[Any], Any], fem.Constant | fem.Function | np.ndarray | Callable[[Any], Any]]]
 
         .. tip::
 

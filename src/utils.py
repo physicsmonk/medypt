@@ -30,7 +30,7 @@ def create_mesh(
     """Create a DOLFINx mesh from a Gmsh model and output to file.
 
     :param comm: MPI communicator top create the mesh on.
-    :type comm: Comm
+    :type comm: MPI.Comm
     :param model: Gmsh model or name of a file containing the mesh (``.msh`` or ``.xdmf``).
     :type model: gmsh.model | str
     :param mesh_dim: Geometric dimension of the mesh of the gmsh model or ``.msh`` file.
@@ -44,7 +44,7 @@ def create_mesh(
     :param mode: XDMF file mode. "w" (write) or "a" (append).
     :type mode: str
     :returns: The created :class:`dolfinx.io.gmsh.MeshData`.
-    :rtype: MeshData
+    :rtype: gmshio.MeshData
     """
     if isinstance(model, gmsh.model):
         mesh_data = gmshio.model_to_mesh(model, comm, rank=rank, gdim=mesh_dim)
