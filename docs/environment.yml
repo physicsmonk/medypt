@@ -10,6 +10,6 @@ dependencies:
   - numpy==2.3.5
   - petsc4py==3.24.1
   - scifem==0.14.0
-  - sphinx==8.3.0
-  - sphinx_rtd_theme==3.0.2
+  - sphinx
+  - sphinx_rtd_theme
 prefix: /home/docs/.conda/envs/medypt-docs
