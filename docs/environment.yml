@@ -4,7 +4,7 @@ channels:
   - defaults
 dependencies:
   - python=3.13.7
-  - fenics-dolfinx==0.10.0.post3
+  - fenics-dolfinx==0.10.0
   - gmsh==4.15.0
   - mpi4py==4.1.1
   - numpy==2.3.5
