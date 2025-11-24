@@ -1,7 +1,7 @@
 name: medypt-docs
 channels:
   - conda-forge
-  - defaults
+  - nodefaults
 dependencies:
   - python=3.13.7
   - fenics-dolfinx==0.10.0
@@ -10,5 +10,6 @@ dependencies:
   - numpy==2.3.5
   - petsc4py==3.24.1
   - scifem==0.14.0
-  - sphinx_rtd_theme
+  - sphinx==8.3.0
+  - sphinx_rtd_theme==3.0.2
 prefix: /home/docs/.conda/envs/medypt-docs
