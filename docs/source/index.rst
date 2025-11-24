@@ -10,7 +10,4 @@ MEDYPT documentation
    :maxdepth: 2
    :caption: Contents:
 
-   imt
-   maters
-   model
-   utils
+   modules
