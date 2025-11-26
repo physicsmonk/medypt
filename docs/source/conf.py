@@ -18,9 +18,12 @@ author = 'Yin Shi'
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
 
 extensions = [
-    'sphinx.ext.autodoc',
+    'autoapi.extension',
+    # 'sphinx.ext.autodoc',
     'sphinx_rtd_theme'
 ]
+
+autoapi_dirs = ['../../src']
 
 templates_path = ['_templates']
 exclude_patterns = []
