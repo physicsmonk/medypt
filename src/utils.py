@@ -497,7 +497,9 @@ def gen_therm_noise(
     It is calculated as: M w = √2 A η L^T, where M is the mass matrix and A, L are the Cholesky factors of the temperature
     and dissipation matrices, respectively. η is a matrix of shape ``(Tmat_dim, dissipUmat_dim)`` containing
     uncorrelated standard normal random numbers, and w of the same shape is the *DOFs* of the proper thermal noise function.
-    Currently only use method of lumped temperature and mass matrices for efficiency.
+    
+    .. note::
+        Currently only use method of lumped temperature and mass matrices for efficiency.
 
     :param Tmat: Assembled :class:`TMat` (temperature matrix) object.
     :type Tmat: TMat
@@ -505,7 +507,7 @@ def gen_therm_noise(
     :type dissipUmat: Any
     :param rng: Numpy random number generator.
     :type rng: Generator
-    :param noise: Output noise field. It is the genuine thermal noise multiplied by sqrt(dt) so that it is independent of dt, 
+    :param noise: Output noise field. It is the genuine thermal noise multiplied by √dt so that it is independent of dt, 
         where dt is the time step size.
     :type noise: fem.Function
     """

@@ -17,61 +17,53 @@ from dolfinx.fem.petsc import NonlinearProblem
 from utils import relativeL2error, TMat, gen_therm_noise
 
 class ModelBase:
-    """Base class for phase-field models.
+    """Base class for phase-field models."""
+    opts: dict[str, Any]
+    """A dictionary of numerical options. Initialized with default values and can be modified in subclasses.
+    Contents include:
 
-    :var params: A dictionary of physical parameters. Initialized to ``None`` and should be set in subclasses.
-    :vartype params: dict[str, Any]
-    :var mesh_data: :class:`dolfinx.io.gmsh.MeshData` object containing mesh and boundary tags. 
-        Initialized to ``None`` and should be set in subclasses.
-    :vartype mesh_data: MeshData
-    :var field: Mixed :class:`dolfinx.fem.Function` object containing all fields. Initialized to 
-        ``None`` and should be set in subclasses.
-    :vartype field: fem.Function
-    :var field_pre: Mixed :class:`dolfinx.fem.Function` object containing all fields at the previous time step. 
-        Initialized to ``None`` and should be set in subclasses.
-    :vartype field_pre: fem.Function
-    :var sub_fields_ufl: A dictionary mapping sub-field names to their UFL representations. 
-        Initialized to ``None`` and should be set in subclasses.
-    :vartype sub_fields_ufl: dict[str, FormArgument]
-    :var sub_fields: A dictionary mapping sub-field names to their :class:`dolfinx.fem.Function` objects 
-        (view to :attr:`ModelBase.field`). Initialized to ``None`` and should be set in subclasses.
-    :vartype sub_fields: dict[str, fem.Function]
-    :var sub_function_spaces: A dictionary mapping sub-field names to their :class:`dolfinx.fem.FunctionSpace` objects
-        (can include both view to the mixed function space and collapsed one). Initialized to ``None`` and should be set in subclasses.
-    :vartype sub_function_spaces: dict[str, fem.FunctionSpace | tuple[fem.FunctionSpace, fem.FunctionSpace]]
-    :var opts: A dictionary of numerical options. Initialized with default values and can be modified in subclasses.
-        Contents include:
-
-        * ``has_thermal_noise`` (bool): Whether to include thermal noise. Default is ``False``.
-        * ``rand_seed`` (int): Random seed for thermal noise generation. Default is ``8347142``.
-        * ``quadr_deg`` (int): Quadrature degree for numerical integration. Default is ``6``.
-        * ``petsc`` (dict): A dictionary of PETSc solver options (see `this`_ for example). Default to use 
-          Newton nonlinear solver with MUMPS direct linear solver.
-        * ``t_step_relative_tol`` (float): Relative tolerance for time discretization error. Default is ``0.01``.
-        * ``dt_min_rescalar`` (float): Minimum factor to reduce time step upon failure. Default is ``0.2``.
-        * ``dt_max_rescalar`` (float): Maximum factor to increase time step upon success. Default is ``4.0``.
-        * ``dt_reducer`` (float): Factor to reduce time step rescalar. Default is ``0.9``.
-        * ``max_successive_fail`` (int): Maximum number of successive failures before stopping. Default is ``100``.
-        * ``min_dt`` (float): Minimum time step size. Default is ``1e-9``.
-        * ``max_dt`` (float): Maximum time step size. Default is ``10.0``.
-        * ``save_period`` (int): Time step period for saving solution. Default is ``1``.
-        * ``log_file_name`` (str): File name for logging evolution. Default is ``evolution.txt``.
-        * ``sol_file_name`` (str): File name for saving solution. Default is ``solution.xdmf``. If the suffix is not ``.xdmf``
-          or if no suffix, save solutions using :class:`dolfinx.io.VTXWriter` into a folder with the given name.
-        * ``verbose`` (bool): Whether to print verbose output. Default is ``False``.
-    :vartype opts: dict[str, Any]
+    * ``has_thermal_noise`` (bool): Whether to include thermal noise. Default is ``False``.
+    * ``rand_seed`` (int): Random seed for thermal noise generation. Default is ``8347142``.
+    * ``quadr_deg`` (int): Quadrature degree for numerical integration. Default is ``6``.
+    * ``petsc`` (dict): A dictionary of PETSc solver options (see `this`_ for example). Default to use 
+      Newton nonlinear solver with MUMPS direct linear solver.
+    * ``t_step_relative_tol`` (float): Relative tolerance for time discretization error. Default is ``0.01``.
+    * ``dt_min_rescalar`` (float): Minimum factor to reduce time step upon failure. Default is ``0.2``.
+    * ``dt_max_rescalar`` (float): Maximum factor to increase time step upon success. Default is ``4.0``.
+    * ``dt_reducer`` (float): Factor to reduce time step rescalar. Default is ``0.9``.
+    * ``max_successive_fail`` (int): Maximum number of successive failures before stopping. Default is ``100``.
+    * ``min_dt`` (float): Minimum time step size. Default is ``1e-9``.
+    * ``max_dt`` (float): Maximum time step size. Default is ``10.0``.
+    * ``save_period`` (int): Time step period for saving solution. Default is ``1``.
+    * ``log_file_name`` (str): File name for logging evolution. Default is ``evolution.txt``.
+    * ``sol_file_name`` (str): File name for saving solution. Default is ``solution.xdmf``. If the suffix is not ``.xdmf``
+      or if no suffix, save solutions using :class:`dolfinx.io.VTXWriter` into a folder with the given name.
+    * ``verbose`` (bool): Whether to print verbose output. Default is ``False``.
 
     .. _this: https://jsdokken.com/dolfinx-tutorial/chapter2/nonlinpoisson_code.html#newtons-method
     """
     params: dict[str, Any]
+    """A dictionary of physical parameters. Initialized to ``None`` and should be set in subclasses."""
     mesh_data: MeshData
+    """:class:`dolfinx.io.gmsh.MeshData` object containing mesh and boundary tags. 
+    Initialized to ``None`` and should be set in subclasses.
+    """
     field: fem.Function
+    """Mixed :class:`dolfinx.fem.Function` object containing all fields. Initialized to 
+    ``None`` and should be set in subclasses.
+    """
     field_pre: fem.Function
+    """Mixed :class:`dolfinx.fem.Function` object containing all fields at the previous time step. Initialized to 
+    ``None`` and should be set in subclasses.
+    """
     sub_fields_ufl: dict[str, FormArgument]
+    """A dictionary mapping sub-field names to their UFL representations."""
     sub_fields: dict[str, fem.Function]
+    """A dictionary mapping sub-field names to their :class:`dolfinx.fem.Function` objects."""
     _sub_fields_tup: tuple[fem.Function, ...]
     _field_idx: dict[str, int]
     sub_function_spaces: dict[str, fem.FunctionSpace | tuple[fem.FunctionSpace, fem.FunctionSpace]]
+    """A dictionary mapping sub-field names to their function spaces or tuples of function spaces (uncollapsed and collapsed)."""
     _sub_dof_maps: dict[str, np.ndarray]
     _bcs_natural: list[tuple[int, int, Expr]]
     _bcs_dirichlet: list[fem.DirichletBC]

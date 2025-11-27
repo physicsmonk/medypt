@@ -24,6 +24,15 @@ extensions = [
 ]
 
 autoapi_dirs = ['../../src']
+autoapi_options = [
+    'members', 
+    'undoc-members', 
+    # 'private-members', 
+    'show-inheritance', 
+    'show-module-summary', 
+    'special-members', 
+    'imported-members'
+]
 
 templates_path = ['_templates']
 exclude_patterns = []

@@ -61,6 +61,23 @@ class IMTModel(model.ModelBase):
             "vol_heat_cap": 217.0, # nm^-3
             "therm_conduct": 4.3e5 # nm^-1 ns^-1. Scalar: isotropic; 2D array-like: full tensor
         } # Physical parameter dictionary
+        """A dictonary defining physical parameters. Contents include:
+
+        * ``stiffness`` (array-like, eV / nm^3): Stiffness tensor. 1D array-like (containing Young's modulus and Poisson's ratio: isotropic) or 
+          2D array-like (full tensor in Voigt notation)
+        * ``e_eff_mass`` (float, dimensionless): Electron effective mass devided by free electron mass
+        * ``h_eff_mass`` (float, dimensionless): Hole effective mass devided by free electron mass
+        * ``therm_expan_coeff`` (float | array-like, eV^-1): Thermal expansion coefficient. Scalar (isotropic) or 
+          1D array-like (full vector in Voigt notation)
+        * ``therm_expan_Tref`` (float, eV): Reference temperature for thermal expansion
+        * ``op_relax_rate`` (float | array-like, nm^3 / (eV ns)): Order-parameter relaxation rate. Scalar (isotropic) or 2D array-like (full tensor)
+        * ``e_mobility`` (float | array-like, nm^2 / (V ns)): Electron mobility. Scalar (isotropic) or 2D array-like (full tensor)
+        * ``h_mobility`` (float | array-like, nm^2 / (V ns)): Hole mobility. Scalar (isotropic) or 2D array-like (full tensor)
+        * ``eh_recomb_rate`` (float, nm^3 / ns): Electron-hole recombination rate
+        * ``back_diel_const`` (float | array-like, dimensionless): Background dielectric constant. Scalar (isotropic) or 2D array-like (full tensor)
+        * ``vol_heat_cap`` (float, nm^-3): Volumetric heat capacity
+        * ``therm_conduct`` (float | array-like, nm^-1 ns^-1): Thermal conductivity. Scalar (isotropic) or 2D array-like (full tensor)
+        """
         self._field_idx = {"op": 0, "u": 1, "ge": 2, "gh": 3, "phi": 4, "T": 5} # Indices must start from 0 and be continuous
 
     def create_fields(
