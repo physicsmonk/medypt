@@ -4,11 +4,12 @@ channels:
   - nodefaults
 dependencies:
   - python=3.13.7
-  - fenics-dolfinx==0.10.0
-  - gmsh==4.15.0
-  - mpi4py==4.1.1
-  - numpy==2.3.5
-  - petsc4py==3.24.1
-  - scifem==0.14.0
+  # - fenics-dolfinx==0.10.0
+  # - gmsh==4.15.0
+  # - mpi4py==4.1.1
+  # - numpy==2.3.5
+  # - petsc4py==3.24.1
+  # - scifem==0.14.0
+  - sphinx-autoapi
   - sphinx_rtd_theme
 prefix: /home/docs/.conda/envs/medypt-docs
