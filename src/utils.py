@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Optional, Any
 from mpi4py import MPI
 
@@ -201,23 +201,23 @@ def young_poisson2stiffness(E: float, nu: float, dim: int) -> list[list[float]]:
         raise ValueError("[young_poisson2stiffness] Dimension must be 1, 2, or 3.")
 
 def relativeL2error(
-        u1: fem.Function | tuple[fem.Function, ...], 
-        u2: fem.Function | tuple[fem.Function, ...], 
+        u1: fem.Function | Sequence[fem.Function], 
+        u2: fem.Function | Sequence[fem.Function], 
         eps: float = 1e-10
     ) -> float:
     """Calculate and return the relative L2 error between two :class:`dolfinx.fem.Function`.
     
-    :param u1: First DOLFINx Function or tuple of its sub-functions (views). Also used as the reference for computing the relative error.
-    :type u1: fem.Function | tuple[fem.Function, ...]
-    :param u2: Second DOLFINx Function or tuple of its sub-functions (views). Must have the same type as ``u1``.
-    :type u2: fem.Function | tuple[fem.Function, ...]
+    :param u1: First DOLFINx Function or sequence of its sub-functions (views). Also used as the reference for computing the relative error.
+    :type u1: fem.Function | Sequence[fem.Function]
+    :param u2: Second DOLFINx Function or sequence of its sub-functions (views). Must have the same type as ``u1``.
+    :type u2: fem.Function | Sequence[fem.Function]
     :param eps: Small value to avoid division by zero.
     :type eps: float
     :returns: Relative L2 error between ``u1`` and ``u2``.
     :rtype: float
     """
     err = 0.0
-    if isinstance(u1, tuple) and isinstance(u2, tuple):
+    if isinstance(u1, Sequence) and isinstance(u2, Sequence):
         for i, u in enumerate(u1):
             du = u - u2[i]
             l2_diff = u.function_space.mesh.comm.allreduce(fem.assemble_scalar(fem.form(ufl.dot(du, du) * ufl.dx)), op=MPI.SUM)

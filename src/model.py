@@ -7,8 +7,10 @@ from mpi4py import MPI
 
 from petsc4py import PETSc
 
+# from basix.ufl import _ElementBase
+from ufl.argument import Argument
 from ufl.core.expr import Expr
-from ufl.core.terminal import FormArgument
+# from ufl.core.terminal import FormArgument
 from dolfinx import fem, default_real_type
 from dolfinx.io.gmsh import MeshData
 from dolfinx.io import XDMFFile, VTXWriter
@@ -48,27 +50,22 @@ class ModelBase:
     """:class:`dolfinx.io.gmsh.MeshData` object containing mesh and boundary tags. 
     Initialized to ``None`` and should be set in subclasses.
     """
-    field: fem.Function
-    """Mixed :class:`dolfinx.fem.Function` object containing all fields. Initialized to 
-    ``None`` and should be set in subclasses.
+    fields: dict[str, fem.Function]
+    """A dictionary mapping field names to their :class:`dolfinx.fem.Function` objects. Initialized to 
+    empty dictionary and should be set in subclasses.
     """
-    field_pre: fem.Function
-    """Mixed :class:`dolfinx.fem.Function` object containing all fields at the previous time step. Initialized to 
-    ``None`` and should be set in subclasses.
+    _fields: list[fem.Function]
+    """A list of fields referencing the same data as :attr:`fields` for internal solving. Initialized to 
+    empty list and should be set in subclasses.
     """
-    sub_fields_ufl: dict[str, FormArgument]
-    """A dictionary mapping sub-field names to their UFL representations."""
-    sub_fields: dict[str, fem.Function]
-    """A dictionary mapping sub-field names to their :class:`dolfinx.fem.Function` objects."""
-    _sub_fields_tup: tuple[fem.Function, ...]
-    _field_idx: dict[str, int]
-    sub_function_spaces: dict[str, fem.FunctionSpace | tuple[fem.FunctionSpace, fem.FunctionSpace]]
-    """A dictionary mapping sub-field names to their function spaces or tuples of function spaces (uncollapsed and collapsed)."""
-    _sub_dof_maps: dict[str, np.ndarray]
+    _fields_pre: dict[str, fem.Function]
+    """A dict of fields at the previous time step. Initialized to empty dict and should be set in subclasses."""
+    _test_funcs: dict[str, Argument]
     _bcs_natural: list[tuple[int, int, Expr]]
     _bcs_dirichlet: list[fem.DirichletBC]
     _dt: fem.Constant
     _noise: fem.Function
+    _weak_forms: list[Expr]  # Blocked weak form, which is a list of UFL expressions
     _problem: NonlinearProblem
     _exprs2save: dict[str, str | tuple[Expr, fem.FunctionSpace]]
     _monitor: dict[str, fem.Form]
@@ -105,18 +102,16 @@ class ModelBase:
         } # Numerical option dictionary
         self.params = None
         self.mesh_data = None
-        self.field = None
-        self.field_pre = None
-        self.sub_fields_ufl = None
-        self.sub_fields = None
-        self._sub_fields_tup = None
-        self._field_idx = None
-        self.sub_function_spaces = None
-        self._sub_dof_maps = None
+        self.fields = {}
+        self._fields = []
+        self._fields_pre = {}
+        self._test_funcs = {}
         self._bcs_natural = None
         self._bcs_dirichlet = None
         self._dt = None
         self._noise = None
+        self._elements = []
+        self._weak_forms = []
         self._problem = None
         self._exprs2save = None
         self._monitor = None
@@ -192,8 +187,8 @@ class ModelBase:
         if ics is not None:
             for name, ic in ics.items():
                 self.sub_fields[name].interpolate(ic)
-            self.field.x.scatter_forward()
-            self.field_pre.x.array[:] = self.field.x.array
+            self.fields.x.scatter_forward()
+            self._fields_pre.x.array[:] = self.fields.x.array
 
         eps = 1e-10
         p_rank = self.mesh_data.mesh.comm.Get_rank()
@@ -206,9 +201,9 @@ class ModelBase:
         t_fail = 0
         n_step = 0
         t = 0.0
-        u2acc = fem.Function(self.field.function_space)
+        u2acc = fem.Function(self.fields.function_space)
         u2acc_subs = u2acc.split()
-        dudt0 = fem.Function(self.field.function_space)
+        dudt0 = fem.Function(self.fields.function_space)
         log_file = open(self.opts["log_file_name"], 'w')
         folder = Path(self.opts["sol_file_name"])
         use_xdmf = (folder.suffix == ".xdmf")
@@ -349,7 +344,7 @@ class ModelBase:
             except PETSc.Error:
                 successive_fail += 1
                 ksp_fail += 1   # Count the number of KSP fails
-                self.field.x.array[:] = self.field_pre.x.array   # Restore initial guess for Newton iteration because u has been destroyed
+                self.fields.x.array[:] = self._fields_pre.x.array   # Restore initial guess for Newton iteration because u has been destroyed
                 self._dt.value *= self.opts["dt_min_rescalar"]
                 if verbose:
                     print(f"[ModelBase.solve] Step {n_step + 1}: KSP solver did not converge! Refined dt to {self._dt.value:15.6e} and test again", flush=True)
@@ -359,7 +354,7 @@ class ModelBase:
             if snes_converged <= 0: # Not converged
                 successive_fail += 1
                 snes_fail += 1
-                self.field.x.array[:] = self.field_pre.x.array   # Restore initial guess for Newton iteration because u has been destroyed
+                self.fields.x.array[:] = self._fields_pre.x.array   # Restore initial guess for Newton iteration because u has been destroyed
                 self._dt.value *= self.opts["dt_min_rescalar"]
                 if verbose:
                     print(f"[ModelBase.solve] Step {n_step + 1}: SNES solver did not converge! Refined dt to {self._dt.value:15.6e} and test again", flush=True)
@@ -367,15 +362,15 @@ class ModelBase:
 
             if n_step > 0:
                 # Compute the second-order accurate estimate of the solution; the current solution u is first-order accurate (backward Euler)
-                u2acc.x.array[:] = self.field_pre.x.array + (dudt0.x.array * self._dt.value + self.field.x.array - self.field_pre.x.array) * 0.5
+                u2acc.x.array[:] = self._fields_pre.x.array + (dudt0.x.array * self._dt.value + self.fields.x.array - self._fields_pre.x.array) * 0.5
                 # Calculate the backward Euler time integration error and time step changing factor
-                rel_err = relativeL2error(u2acc_subs, self._sub_fields_tup, eps=eps)
+                rel_err = relativeL2error(u2acc_subs, self._fields, eps=eps)
                 dt_factor = min(max(self.opts["dt_reducer"] * np.sqrt(self.opts["t_step_relative_tol"] / max(rel_err, eps)), 
                                     self.opts["dt_min_rescalar"]), self.opts["dt_max_rescalar"])
                 if rel_err > self.opts["t_step_relative_tol"]:
                     successive_fail += 1
                     t_fail += 1
-                    self.field.x.array[:] = self.field_pre.x.array   # Restore initial guess for newton iteration
+                    self.fields.x.array[:] = self._fields_pre.x.array   # Restore initial guess for newton iteration
                     self._dt.value *= dt_factor   # dt_factor < 1 here
                     if verbose:
                         print(f'[ModelBase.solve] Step {n_step + 1}: Time stepping error {rel_err:15.6e} exceeded tolerance, refined dt to {self._dt.value:15.6e} and test again', flush=True)
@@ -394,7 +389,7 @@ class ModelBase:
                     if isinstance(expr, str):
                         # u4save = u.sub(self.func2save[key]).collapse()   # Shallow copy seems not working properly for saving subfunctions, so use collapse()
                         # u4save.name = key
-                        funcs2save[key].x.array[:] = self.field.x.array[self._sub_dof_maps[expr]]
+                        funcs2save[key].x.array[:] = self.fields.x.array[self._sub_dof_maps[expr]]
                     else:
                         # u4save = sols2save[key].project(self.func2save[key][0])  # Name already set in Projector
                         funcs2save[key].interpolate(compiled_sols[key])
@@ -429,8 +424,8 @@ class ModelBase:
             #     # print(grid.point_data[plot_name])
             #     plotter.app.processEvents()
 
-            dudt0.x.array[:] = (self.field.x.array - self.field_pre.x.array) / self._dt.value   # Store time derivative for next step
-            self.field_pre.x.array[:] = self.field.x.array
+            dudt0.x.array[:] = (self.fields.x.array - self._fields_pre.x.array) / self._dt.value   # Store time derivative for next step
+            self._fields_pre.x.array[:] = self.fields.x.array
 
             if verbose:
                 print(f'[ModelBase.solve] Step {n_step}: Completed refinement, dt = {self._dt.value:15.6e}, t = {t:15.6e}', flush=True)

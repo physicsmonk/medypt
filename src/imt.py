@@ -1,4 +1,4 @@
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 import numpy as np
 
@@ -78,7 +78,161 @@ class IMTModel(model.ModelBase):
         * ``vol_heat_cap`` (float, nm^-3): Volumetric heat capacity
         * ``therm_conduct`` (float | array-like, nm^-1 ns^-1): Thermal conductivity. Scalar (isotropic) or 2D array-like (full tensor)
         """
-        self._field_idx = {"op": 0, "u": 1, "ge": 2, "gh": 3, "phi": 4, "T": 5} # Indices must start from 0 and be continuous
+        # self._field_idx = {"op": 0, "u": 1, "ge": 2, "gh": 3, "phi": 4, "T": 5} # Indices must start from 0 and be continuous
+
+    def load_mesh(
+            self, 
+            comm: MPI.Comm,  
+            mesh: gmsh.model | str, 
+            mesh_dim: int = 3, 
+            rank: int = 0, 
+            mesh_name: str = "mesh"
+        ):
+        """Load the mesh data.
+        
+        :param comm: MPI communicator.
+        :type comm: MPI.Comm
+        :param mesh: Gmsh model or a file name with the ``.msh`` or ``.xdmf`` format.
+        :type mesh: gmsh.model | str
+        :param mesh_dim: Geometric dimension of the mesh.
+        :type mesh_dim: int
+        :param rank: Rank of the MPI process (used for generating from gmsh model or reading from ``.msh`` files).
+        :type rank: int
+        :param mesh_name: Name (identifier) of the mesh to read from the ``.xdmf`` file.
+        :type mesh_name: str
+        :returns: None
+        """
+        self.mesh_data = utils.create_mesh(comm, mesh, mesh_dim, rank=rank, mesh_name=mesh_name)
+
+    def load_physics(self, phys: Sequence[str], **kwargs: Any):
+        """Load physics components of the insulator-metal transition model.
+        """
+        dx = ufl.Measure("dx", domain=self.mesh_data.mesh, subdomain_data=self.mesh_data.cell_tags, 
+                         metadata={"quadrature_degree": self.opts["quadr_deg"]})
+        
+        has_T = ("T" in phys)
+        has_op = ("op" in phys)
+        has_u = ("u" in phys)
+        has_eh = ("eh" in phys)
+        has_phi = ("phi" in phys)
+        
+        if has_T:
+            FE = element("CG", self.mesh_data.mesh.basix_cell(), 1, dtype=default_real_type)
+            self._fields.append(fem.Function(fem.functionspace(self.mesh_data.mesh, FE), name="T", dtype=default_real_type))
+            self.fields["T"] = self._fields[-1]
+            self._fields_pre.append(fem.Function(fem.functionspace(self.mesh_data.mesh, FE), name="T_pre", dtype=default_real_type))
+
+            self._test_funcs["T"] = ufl.TestFunction(self.fields["T"].function_space)
+
+            therm_cond = self.params["therm_conduct"]
+            if isinstance(therm_cond, Iterable):
+                therm_cond = ufl.as_matrix(therm_cond)
+
+            self._weak_forms.append(
+                (self.params["vol_heat_cap"] * (self.fields["T"] - self._fields_pre["T"])) * self._test_funcs["T"] * dx 
+                + self._dt * ufl.inner(therm_cond * ufl.grad(self.fields["T"]), ufl.grad(self._test_funcs["T"])) * dx
+            )
+
+        if has_op:
+            if "op_dim" not in kwargs:
+                raise ValueError("[IMTModel.load_physics] 'op_dim' must be specified using a keyword argument when loading the order-parameter field.")
+            if "intrinsic_f" not in kwargs:
+                raise ValueError("[IMTModel.load_physics] 'intrinsic_f' must be specified using a keyword argument when loading the order-parameter field.")
+            FE = element("CG", self.mesh_data.mesh.basix_cell(), 1, shape=(kwargs["op_dim"],), dtype=default_real_type)
+            self._fields.append(fem.Function(fem.functionspace(self.mesh_data.mesh, FE), name="op", dtype=default_real_type))
+            self.fields["op"] = self._fields[-1]
+            self._fields_pre.append(fem.Function(fem.functionspace(self.mesh_data.mesh, FE), name="op_pre", dtype=default_real_type))
+
+            # Temperature field is needed. Here it is only included in the public dict of fields
+            # for users to specify its value using an initial condition, not in the private list for internal solving.
+            if "T" not in self.fields:
+                self.fields["T"] = fem.Function(
+                    fem.functionspace(
+                        self.mesh_data.mesh, 
+                        element("CG", self.mesh_data.mesh.basix_cell(), 1, dtype=default_real_type)
+                    ), 
+                    name="T", 
+                    dtype=default_real_type
+                )
+
+            self._test_funcs["op"] = ufl.TestFunction(self.fields["op"].function_space)
+
+            op = ufl.variable(self.fields["op"])
+            dop = ufl.variable(ufl.grad(op))
+            f_in = kwargs["intrinsic_f"](self.fields["T"], op, dop)
+
+            op_rate = self.params["op_relax_rate"]
+            if isinstance(op_rate, Iterable):
+                op_rate = ufl.as_matrix(op_rate)
+
+            self._weak_forms.append(
+                ufl.inner(op - self._fields_pre["op"] + self._dt * op_rate * ufl.diff(f_in, op) 
+                          - ufl.sqrt(self._dt) * self._noise, self._test_funcs["op"]) * dx 
+                + self._dt * ufl.inner(ufl.diff(f_in, dop), ufl.grad(self._test_funcs["op"])) * dx
+            )
+
+        if has_u:
+            mesh_dim = self.mesh_data.mesh.topology.dim
+            FE = element("CG", self.mesh_data.mesh.basix_cell(), 1, shape=(mesh_dim,), dtype=default_real_type)
+            self._fields.append(fem.Function(fem.functionspace(self.mesh_data.mesh, FE), name="u", dtype=default_real_type))
+            self.fields["u"] = self._fields[-1]
+        
+        for p in phys:
+            if p == "op":
+                if "op_dim" not in kwargs:
+                    raise ValueError("[IMTModel.load_physics] 'op_dim' must be specified using a keyword argument when loading the order-parameter field.")
+                FE = element("CG", self.mesh_data.mesh.basix_cell(), 1, shape=(kwargs["op_dim"],), dtype=default_real_type)
+
+            if phys == "eh":
+                FS_e = fem.functionspace(self.mesh_data.mesh, FE)
+                FS_h = fem.functionspace(self.mesh_data.mesh, FE)
+                self._fields.append(fem.Function(FS_e, name="ge", dtype=default_real_type))
+                self.fields["ge"] = self._fields[-1]
+                self._fields.append(fem.Function(FS_h, name="gh", dtype=default_real_type))
+                self.fields["gh"] = self._fields[-1]
+                self._fields_pre.append(fem.Function(FS_e, name="ge_pre", dtype=default_real_type))
+                self._fields_pre.append(fem.Function(FS_h, name="gh_pre", dtype=default_real_type))
+
+                
+                self.fields["T"] = fem.Function(
+                    fem.functionspace(self.mesh_data.mesh, element("CG", self.mesh_data.mesh.basix_cell(), 1, dtype=default_real_type)),
+                    name="T", 
+                    dtype=default_real_type
+                )
+
+                m_h2 = 0.332420142 # m / h^2 in unit of eV^-1 nm^-2
+                me = self.params["e_eff_mass"]
+                mh = self.params["h_eff_mass"]
+                Nc = 2.0 * (2.0 * np.pi * m_h2 * me * self.fields["T"]) ** 1.5
+                Nv = 2.0 * (2.0 * np.pi * m_h2 * mh * self.fields["T"]) ** 1.5
+                n = Nc * utils.f1_2(self.fields["ge"])
+                p = Nv * utils.f1_2(self.fields["gh"])
+                _Nc = 2.0 * (2.0 * np.pi * m_h2 * me * _T) ** 1.5
+                _Nv = 2.0 * (2.0 * np.pi * m_h2 * mh * _T) ** 1.5
+                _n = _Nc * utils.f1_2(_ge)
+                _p = _Nv * utils.f1_2(_gh)
+                # This is intrinsic chemical potential valid only for a large energy gap compared to T 
+                # (but valid for all values of gap if mh = me).
+                # TODO: Find a better approximation for the charge-neutral chemical potential for all values
+                # of the energy gap.
+                mu_neutr = E0 + 3.0 / 4.0 * self.sub_fields_ufl["T"] * np.log(mh / me)
+                n_in = Nc * utils.f1_2((mu_neutr - Ee) / self.sub_fields_ufl["T"])
+                # Local equilibrium electron and hole densities for given order parameter, potential, and temperature
+                n_eq = Nc * utils.f1_2((mu_neutr - Ee + self.sub_fields_ufl["phi"]) / self.sub_fields_ufl["T"])
+                p_eq = Nv * utils.f1_2((-mu_neutr - Eh - self.sub_fields_ufl["phi"]) / self.sub_fields_ufl["T"])
+
+                self._weak_forms.append(
+                    (n - _n - self._dt * gen_rad) * v_ge * dx - self._dt * ufl.inner(je, ufl.grad(v_ge)) * dx
+                )
+                self._weak_forms.append(
+                    (p - _p - self._dt * gen_rad) * v_gh * dx - self._dt * ufl.inner(jh, ufl.grad(v_gh)) * dx
+                )
+            else:
+                FS = fem.functionspace(self.mesh_data.mesh, FE)
+                self._fields.append(fem.Function(FS, name=phys, dtype=default_real_type))
+                self.fields[phys] = self._fields[-1]
+            
+
 
     def create_fields(
             self, 
@@ -148,16 +302,16 @@ class IMTModel(model.ModelBase):
             "T": dof_T
         }
 
-        self.field = fem.Function(FS, name="fields", dtype=default_real_type) # Function object stores the function space
-        subfs_ufl = ufl.split(self.field) # Tuple containing ufl representations of sub-functions for defining variational forms
-        self._sub_fields_tup = self.field.split()
+        self.fields = fem.Function(FS, name="fields", dtype=default_real_type) # Function object stores the function space
+        subfs_ufl = ufl.split(self.fields) # Tuple containing ufl representations of sub-functions for defining variational forms
+        self._fields = self.fields.split()
         j0 = fem.Function(FS_R, name="j0", dtype=default_real_type) # Helper field for average boundary current density
         self.sub_fields_ufl = {"j0": j0}
         self.sub_fields = {"j0": j0}
         for name, idx in self._field_idx.items():
             self.sub_fields_ufl[name] = subfs_ufl[idx]
-            self.sub_fields[name] = self._sub_fields_tup[idx]
-        self.field_pre = fem.Function(FS) # For storing previous time-step fields
+            self.sub_fields[name] = self._fields[idx]
+        self._fields_pre = fem.Function(FS) # For storing previous time-step fields
         # No need to save dx and ds as class attributes because the call operator will return a new, reconstructed Measure object each time.
 
     def create_problem(
@@ -204,8 +358,8 @@ class IMTModel(model.ModelBase):
         self._noise = fem.Function(self.sub_function_spaces["op"][1], name="noise", dtype=default_real_type) # Noise placeholder
 
         # op, u, ge, gh, phi, T, j0 = self.sub_fields_ufl
-        _op, _u, _ge, _gh, _phi, _T = ufl.split(self.field_pre) # Previous time-step fields
-        v = ufl.TestFunctions(self.field.function_space)
+        _op, _u, _ge, _gh, _phi, _T = ufl.split(self._fields_pre) # Previous time-step fields
+        v = ufl.TestFunctions(self.fields.function_space)
         v_op, v_u, v_ge, v_gh, v_phi, v_T = v
         v_j0 = ufl.TestFunction(self.sub_function_spaces["j0"])
 
@@ -310,7 +464,7 @@ class IMTModel(model.ModelBase):
 
         self.opts["petsc"]["ksp_error_if_not_converged"] = True # Force error if linear solver not converged
         self.opts["petsc"]["snes_error_if_not_converged"] = False # Force pass if nonlinear solver not converged; its convergence will be checked separately.
-        self._problem = NonlinearProblem(F, [self.field, self.sub_fields["j0"]], petsc_options_prefix="imt_", bcs=self._bcs_dirichlet, 
+        self._problem = NonlinearProblem(F, [self.fields, self.sub_fields["j0"]], petsc_options_prefix="imt_", bcs=self._bcs_dirichlet, 
                                          kind="mpi", petsc_options=self.opts["petsc"])
         
         # Define von Mises stress
