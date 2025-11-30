@@ -8,6 +8,7 @@ from mpi4py import MPI
 from petsc4py import PETSc
 
 # from basix.ufl import _ElementBase
+from ufl import Measure
 from ufl.argument import Argument
 from ufl.core.expr import Expr
 # from ufl.core.terminal import FormArgument
@@ -45,7 +46,7 @@ class ModelBase:
     .. _this: https://jsdokken.com/dolfinx-tutorial/chapter2/nonlinpoisson_code.html#newtons-method
     """
     params: dict[str, Any]
-    """A dictionary of physical parameters. Initialized to ``None`` and should be set in subclasses."""
+    """A dictionary of physical parameters. Initialized to empty dictionary and should be set in subclasses."""
     mesh_data: MeshData
     """:class:`dolfinx.io.gmsh.MeshData` object containing mesh and boundary tags. 
     Initialized to ``None`` and should be set in subclasses.
@@ -54,18 +55,18 @@ class ModelBase:
     """A dictionary mapping field names to their :class:`dolfinx.fem.Function` objects. Initialized to 
     empty dictionary and should be set in subclasses.
     """
-    _fields: list[fem.Function]
-    """A list of fields referencing the same data as :attr:`fields` for internal solving. Initialized to 
-    empty list and should be set in subclasses.
-    """
     _fields_pre: dict[str, fem.Function]
     """A dict of fields at the previous time step. Initialized to empty dict and should be set in subclasses."""
     _test_funcs: dict[str, Argument]
-    _bcs_natural: list[tuple[int, int, Expr]]
-    _bcs_dirichlet: list[fem.DirichletBC]
+    _bcs: list[fem.DirichletBC]  # Dirichlet boundary conditions
     _dt: fem.Constant
+    _have_dt: dict[str, bool]
+    """A dict indicating whether each field has a time derivative term in its equation. 
+    Initialized to empty dict and should be set in subclasses.
+    """
     _noise: fem.Function
-    _weak_forms: list[Expr]  # Blocked weak form, which is a list of UFL expressions
+    _weak_forms: dict[str, Expr] 
+    """Blocked weak form. Each entry corresponds to a field equation."""
     _problem: NonlinearProblem
     _exprs2save: dict[str, str | tuple[Expr, fem.FunctionSpace]]
     _monitor: dict[str, fem.Form]
@@ -100,23 +101,21 @@ class ModelBase:
             "sol_file_name": "solution.xdmf", 
             "verbose": False
         } # Numerical option dictionary
-        self.params = None
+        self.params = {}
         self.mesh_data = None
         self.fields = {}
-        self._fields = []
         self._fields_pre = {}
         self._test_funcs = {}
-        self._bcs_natural = None
-        self._bcs_dirichlet = None
+        self._bcs = []
         self._dt = None
+        self._have_dt = {}
         self._noise = None
-        self._elements = []
-        self._weak_forms = []
+        self._weak_forms = {}
         self._problem = None
-        self._exprs2save = None
-        self._monitor = None
+        self._exprs2save = {}
+        self._monitor = {}
         
-    def create_bcs(self, bcs: list[tuple[str, int | Callable[[Any], Any], fem.Constant | fem.Function | np.ndarray | Callable[[Any], Any]]]):
+    def set_bcs(self, bcs: list[tuple[str, int | Callable[[Any], Any], fem.Constant | fem.Function | np.ndarray | Callable[[Any], Any]]]):
         """Generate boundary conditions.
 
         :param bcs: A list of tuples specifying boundary conditions. Each tuple is ``(name, b, bc)``, where:
@@ -142,21 +141,38 @@ class ModelBase:
             and pass that function to :meth:`ModelBase.solve`.
         """
         facet_dim = self.mesh_data.mesh.topology.dim - 1
-        self._bcs_natural = []
-        self._bcs_dirichlet = []
+        ds = Measure("ds", domain=self.mesh_data.mesh, subdomain_data=self.mesh_data.facet_tags, 
+                     metadata={"quadrature_degree": self.opts["quadr_deg"]})
+        self._bcs.clear()
         for name, tag, bc in bcs:
             if isinstance(bc, (fem.Constant, fem.Function, np.ndarray)):
                 if callable(tag): # See https://fenicsproject.discourse.group/t/dolfinx-dirichlet-bcs-for-mixed-function-spaces/7844
-                    bdr_dof = fem.locate_dofs_geometrical(self.sub_function_spaces[name], tag)
-                elif name == "op" or name == "u": # Treat vector function spaces properly
-                    bdr_dof = fem.locate_dofs_topological(self.sub_function_spaces[name], facet_dim, self.mesh_data.facet_tags.find(tag))
+                    bdr_dof = fem.locate_dofs_geometrical(self.fields[name].function_space, tag)
                 else:
-                    bdr_dof = fem.locate_dofs_topological(self.sub_function_spaces[name][0], facet_dim, self.mesh_data.facet_tags.find(tag))
-                self._bcs_dirichlet.append(fem.dirichletbc(bc, bdr_dof, self.sub_function_spaces[name][0]))
+                    bdr_dof = fem.locate_dofs_topological(self.fields[name].function_space, facet_dim, self.mesh_data.facet_tags.find(tag))
+                if isinstance(bc, fem.Function):
+                    self._bcs.append(fem.dirichletbc(bc, bdr_dof))
+                else:
+                    self._bcs.append(fem.dirichletbc(bc, bdr_dof, self.fields[name].function_space))
             else:
                 if callable(tag):
                     raise ValueError("[ModelBase.create_bcs] Natural boundary conditions cannot be defined on boundaries specified by callables.")
-                self._bcs_natural.append((self._field_idx[name], tag, bc(self.sub_fields_ufl)))
+                if self._have_dt[name]:  # Multiply time step size for time-derivative-dependent weak forms
+                    self._weak_forms[name] += self._dt * bc(self.fields) * self._test_funcs[name] * ds(tag)
+                else:
+                    self._weak_forms[name] += bc(self.fields) * self._test_funcs[name] * ds(tag)
+
+    def create_problem(self):
+        """Create the finite element problem that is ready for solving."""
+        names = sorted(self._weak_forms)
+        F = [self._weak_forms[name] for name in names]
+        u = [self.fields[name] for name in names]
+
+        self.opts["petsc"]["ksp_error_if_not_converged"] = True # Force error if linear solver not converged
+        self.opts["petsc"]["snes_error_if_not_converged"] = False # Force pass if nonlinear solver not converged; its convergence will be checked separately.
+        # u parameter does not accept UFL Variable
+        self._problem = NonlinearProblem(F, u, petsc_options_prefix="medypt_", bcs=self._bcs, 
+                                         kind="mpi", petsc_options=self.opts["petsc"])
 
     def solve(
             self, 
@@ -186,9 +202,9 @@ class ModelBase:
             self._dt.value = dt
         if ics is not None:
             for name, ic in ics.items():
-                self.sub_fields[name].interpolate(ic)
-            self.fields.x.scatter_forward()
-            self._fields_pre.x.array[:] = self.fields.x.array
+                self.fields[name].interpolate(ic)
+                self.fields[name].x.scatter_forward()
+                self._fields_pre[name].x.array[:] = self.fields[name].x.array
 
         eps = 1e-10
         p_rank = self.mesh_data.mesh.comm.Get_rank()
@@ -201,9 +217,12 @@ class ModelBase:
         t_fail = 0
         n_step = 0
         t = 0.0
-        u2acc = fem.Function(self.fields.function_space)
-        u2acc_subs = u2acc.split()
-        dudt0 = fem.Function(self.fields.function_space)
+        u2acc = {}  
+        dudt_pre = {}
+        for name, has_dt in self._have_dt.items():
+            if has_dt:  # Only for equations with time derivative terms
+                u2acc[name] = fem.Function(self.fields[name].function_space, name=f"{name}_2acc", dtype=default_real_type)
+                dudt_pre[name] = fem.Function(self.fields[name].function_space, name=f"d{name}_dt_pre", dtype=default_real_type)
         log_file = open(self.opts["log_file_name"], 'w')
         folder = Path(self.opts["sol_file_name"])
         use_xdmf = (folder.suffix == ".xdmf")
@@ -215,7 +234,7 @@ class ModelBase:
             sol_file = {}  # Store different solutions into separate files because they could be based on different finite elements
         if self.opts["has_thermal_noise"]:
             Tmat = TMat()
-            Tmat.setT((self.sub_fields_ufl["T"], self.sub_function_spaces["T"][1]))
+            Tmat.setT(self.fields["T"])
             if isinstance(self.params["op_relax_rate"], Iterable):
                 dissipU = np.linalg.cholesky(np.asarray(self.params["op_relax_rate"]), upper=True)
             else:
@@ -230,19 +249,18 @@ class ModelBase:
         funcs2save = {}  # Dictionary containing Functions for saving algebraic expressions of dolfinx Functions
         for key, expr in self._exprs2save.items():
             if isinstance(expr, str):  
-                # Generate a fresh Function object for saving to file; 
                 # see https://fenicsproject.discourse.group/t/typeerror-boundingboxtree-init-takes-2-positional-arguments-but-3-were-given/12825
-                funcs2save[key] = self.sub_fields[expr].collapse()
+                funcs2save[key] = self.fields[expr] # Store a convenient reference to corresponding fields
             else:
                 # sols2save[key] = Projector(self.func2save[key][1], petsc_options=self.options["proj_petsc_opt"], metadata=self.options["proj_metadata"])  
                 # u4save = sols2save[key].project(self.func2save[key][0])  # Returns the Function object stored in the Projector object
                 # u4save.name = key
                 compiled_sols[key] = fem.Expression(expr[0], expr[1].element.interpolation_points)
-                funcs2save[key] = fem.Function(expr[1]) # Create a new Function object for saving
+                funcs2save[key] = fem.Function(expr[1], name=key, dtype=default_real_type) # Create a new Function object for saving
                 funcs2save[key].interpolate(compiled_sols[key]) # Interpolation does not have the overshoot issue
                 # if key == self.options["sol_to_plot"]:  # This is the only case where sol2plot is needed
                 #     sol2plot = u4save  # This stores a reference to the Function object in the proper Projector object
-            funcs2save[key].name = key
+            # funcs2save[key].name = key
             if use_xdmf:
                 sol_file.write_function(funcs2save[key], t)
             else:
@@ -344,7 +362,8 @@ class ModelBase:
             except PETSc.Error:
                 successive_fail += 1
                 ksp_fail += 1   # Count the number of KSP fails
-                self.fields.x.array[:] = self._fields_pre.x.array   # Restore initial guess for Newton iteration because u has been destroyed
+                for name, func in self.fields.items():
+                    func.x.array[:] = self._fields_pre[name].x.array  # Restore initial guess for Newton iteration because fields have been spoiled
                 self._dt.value *= self.opts["dt_min_rescalar"]
                 if verbose:
                     print(f"[ModelBase.solve] Step {n_step + 1}: KSP solver did not converge! Refined dt to {self._dt.value:15.6e} and test again", flush=True)
@@ -354,7 +373,8 @@ class ModelBase:
             if snes_converged <= 0: # Not converged
                 successive_fail += 1
                 snes_fail += 1
-                self.fields.x.array[:] = self._fields_pre.x.array   # Restore initial guess for Newton iteration because u has been destroyed
+                for name, func in self.fields.items():
+                    func.x.array[:] = self._fields_pre[name].x.array  # Restore initial guess for Newton iteration because fields have been spoiled
                 self._dt.value *= self.opts["dt_min_rescalar"]
                 if verbose:
                     print(f"[ModelBase.solve] Step {n_step + 1}: SNES solver did not converge! Refined dt to {self._dt.value:15.6e} and test again", flush=True)
@@ -362,15 +382,20 @@ class ModelBase:
 
             if n_step > 0:
                 # Compute the second-order accurate estimate of the solution; the current solution u is first-order accurate (backward Euler)
-                u2acc.x.array[:] = self._fields_pre.x.array + (dudt0.x.array * self._dt.value + self.fields.x.array - self._fields_pre.x.array) * 0.5
+                for name, u2 in u2acc.items():
+                    u2.x.array[:] = (
+                        self._fields_pre[name].x.array + (dudt_pre[name].x.array * self._dt.value 
+                                                          + self.fields[name].x.array - self._fields_pre[name].x.array) * 0.5
+                    )
                 # Calculate the backward Euler time integration error and time step changing factor
-                rel_err = relativeL2error(u2acc_subs, self._fields, eps=eps)
+                rel_err = relativeL2error(u2acc, self.fields, eps=eps)  # Only taking into account fields with time derivative terms in their equations
                 dt_factor = min(max(self.opts["dt_reducer"] * np.sqrt(self.opts["t_step_relative_tol"] / max(rel_err, eps)), 
                                     self.opts["dt_min_rescalar"]), self.opts["dt_max_rescalar"])
                 if rel_err > self.opts["t_step_relative_tol"]:
                     successive_fail += 1
                     t_fail += 1
-                    self.fields.x.array[:] = self._fields_pre.x.array   # Restore initial guess for newton iteration
+                    for name, func in self.fields.items():
+                        func.x.array[:] = self._fields_pre[name].x.array   # Restore initial guess for newton iteration because fields have been spoiled
                     self._dt.value *= dt_factor   # dt_factor < 1 here
                     if verbose:
                         print(f'[ModelBase.solve] Step {n_step + 1}: Time stepping error {rel_err:15.6e} exceeded tolerance, refined dt to {self._dt.value:15.6e} and test again', flush=True)
@@ -386,11 +411,7 @@ class ModelBase:
             # use ExtractBlock filter for the Function to be visualized to avoid wierd behavior.
             if (n_step - 1) % self.opts["save_period"] == 0:
                 for key, expr in self._exprs2save.items():
-                    if isinstance(expr, str):
-                        # u4save = u.sub(self.func2save[key]).collapse()   # Shallow copy seems not working properly for saving subfunctions, so use collapse()
-                        # u4save.name = key
-                        funcs2save[key].x.array[:] = self.fields.x.array[self._sub_dof_maps[expr]]
-                    else:
+                    if isinstance(expr, tuple):
                         # u4save = sols2save[key].project(self.func2save[key][0])  # Name already set in Projector
                         funcs2save[key].interpolate(compiled_sols[key])
                     if use_xdmf:
@@ -424,15 +445,17 @@ class ModelBase:
             #     # print(grid.point_data[plot_name])
             #     plotter.app.processEvents()
 
-            dudt0.x.array[:] = (self.fields.x.array - self._fields_pre.x.array) / self._dt.value   # Store time derivative for next step
-            self._fields_pre.x.array[:] = self.fields.x.array
+            for name, func in dudt_pre.items():  # Store time derivative for next step
+                func.x.array[:] = (self.fields[name].x.array - self._fields_pre[name].x.array) / self._dt.value  
+            for name, func in self._fields_pre.items():
+                func.x.array[:] = self.fields[name].x.array
 
             if verbose:
                 print(f'[ModelBase.solve] Step {n_step}: Completed refinement, dt = {self._dt.value:15.6e}, t = {t:15.6e}', flush=True)
             if p_rank == 0:
                 log_file.write(f"{n_step:15d} {t:15.6e} {self._dt.value:15.6e} {t_fail:15d} {snes_fail:15d} {ksp_fail:15d} ")
-            for key in self._monitor:
-                out = self.mesh_data.mesh.comm.allreduce(fem.assemble_scalar(self._monitor[key]), op=MPI.SUM)
+            for key, form in self._monitor.items():
+                out = self.mesh_data.mesh.comm.allreduce(fem.assemble_scalar(form), op=MPI.SUM)
                 if p_rank == 0:
                     log_file.write(f"{out:15.6e} ")
             if p_rank == 0:

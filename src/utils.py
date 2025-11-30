@@ -1,4 +1,4 @@
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Sequence, Iterable
 from typing import Optional, Any
 from mpi4py import MPI
 
@@ -201,23 +201,32 @@ def young_poisson2stiffness(E: float, nu: float, dim: int) -> list[list[float]]:
         raise ValueError("[young_poisson2stiffness] Dimension must be 1, 2, or 3.")
 
 def relativeL2error(
-        u1: fem.Function | Sequence[fem.Function], 
-        u2: fem.Function | Sequence[fem.Function], 
+        u1: fem.Function | Sequence[fem.Function] | dict[str, fem.Function], 
+        u2: fem.Function | Sequence[fem.Function] | dict[str, fem.Function], 
         eps: float = 1e-10
     ) -> float:
-    """Calculate and return the relative L2 error between two :class:`dolfinx.fem.Function`.
+    """Calculate and return the relative L2 error between two :class:`dolfinx.fem.Function`s.
     
-    :param u1: First DOLFINx Function or sequence of its sub-functions (views). Also used as the reference for computing the relative error.
-    :type u1: fem.Function | Sequence[fem.Function]
-    :param u2: Second DOLFINx Function or sequence of its sub-functions (views). Must have the same type as ``u1``.
-    :type u2: fem.Function | Sequence[fem.Function]
+    :param u1: First DOLFINx Function(s). Also used as the reference for computing the relative error. Iteration
+        is performed over ``u1``.
+    :type u1: fem.Function | Iterable[fem.Function] | dict[str, fem.Function]
+    :param u2: Second DOLFINx Function(s). Must have the same type as ``u1``. Can have more items than ``u1`` and 
+        only the items corresponding to those of ``u1`` are used.
+    :type u2: fem.Function | Iterable[fem.Function] | dict[str, fem.Function]
     :param eps: Small value to avoid division by zero.
     :type eps: float
     :returns: Relative L2 error between ``u1`` and ``u2``.
     :rtype: float
     """
     err = 0.0
-    if isinstance(u1, Sequence) and isinstance(u2, Sequence):
+    if isinstance(u1, dict) and isinstance(u2, dict):
+        for name, u in u1.items():
+            du = u - u2[name]
+            l2_diff = u.function_space.mesh.comm.allreduce(fem.assemble_scalar(fem.form(ufl.dot(du, du) * ufl.dx)), op=MPI.SUM)
+            l2_u1 = u.function_space.mesh.comm.allreduce(fem.assemble_scalar(fem.form(ufl.dot(u, u) * ufl.dx)), op=MPI.SUM)
+            err += l2_diff / (l2_u1 + eps)
+        n_subspaces = len(u1)
+    elif isinstance(u1, Sequence) and isinstance(u2, Sequence):
         for i, u in enumerate(u1):
             du = u - u2[i]
             l2_diff = u.function_space.mesh.comm.allreduce(fem.assemble_scalar(fem.form(ufl.dot(du, du) * ufl.dx)), op=MPI.SUM)
