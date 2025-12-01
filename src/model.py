@@ -156,9 +156,12 @@ class ModelBase:
               A variable is for Dirichlet boundary conditions, while a callable is for natural boundary conditions. The callable 
               will have a calling signature ``bc(fields)``, where ``fields`` is treated as a tuple containing the splitted fields. 
               It covers boundary conditions of the Neumann, Robin, and other general types implemented using the Nistche's trick 
-              [10.1016/j.camwa.2022.11.025; 10.1103/PhysRevApplied.17.014042]. The default is the zero-flux boundary condition.
+              [1]_ [2]_. The default is the zero-flux boundary condition.
 
         :type bcs: list[tuple[str, int | Callable[[Any], Any], fem.Constant | fem.Function | np.ndarray | Callable[[Any], Any]]]
+
+        .. [1] https://doi.org/10.1016/j.camwa.2022.11.025
+        .. [2] https://doi.org/10.1103/PhysRevApplied.17.014042
 
         .. tip::
 
