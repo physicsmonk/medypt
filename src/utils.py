@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Sequence, Iterable
 from typing import Optional, Any
 from mpi4py import MPI
 
@@ -21,57 +21,58 @@ from dolfinx.io import gmsh as gmshio
 def create_mesh(
         comm: MPI.Comm, 
         model: gmsh.model | str, 
-        mesh_dim: int = 3, 
-        rank: int = 0, 
-        mesh_name: str = "mesh", 
-        filename: str | None = None, 
-        mode: str = "w"
+        out_file: str | None = None, 
+        **kwargs: Any
     ) -> gmshio.MeshData:
     """Create a DOLFINx mesh from a Gmsh model and output to file.
 
     :param comm: MPI communicator top create the mesh on.
     :type comm: MPI.Comm
-    :param model: Gmsh model or name of a file containing the mesh (``.msh`` or ``.xdmf``).
+    :param model: Gmsh model or name of a file containing the mesh (``.msh`` or ``.xdmf``). Reading from
+        ``.xdmf`` file is the most efficient and is recommended for large mesh.
     :type model: gmsh.model | str
-    :param mesh_dim: Geometric dimension of the mesh of the gmsh model or ``.msh`` file.
-    :type mesh_dim: int
-    :param rank: Rank of the MPI process (used for generating from gmsh model or reading from ``.msh`` files).
-    :type rank: int
-    :param mesh_name: Name (identifier) of the mesh to read from the input ``.xdmf`` file and to add to the output file.
-    :type mesh_name: str
-    :param filename: XDMF filename for writing. Default to ``None`` for not writing to XDMF file.
-    :type filename: str | None
-    :param mode: XDMF file mode. "w" (write) or "a" (append).
-    :type mode: str
-    :returns: The created :class:`dolfinx.io.gmsh.MeshData`.
+    :param out_file: ``.xdmf`` file name for writing. Default to ``None`` for not writing to ``.xdmf`` file.
+    :type out_file: str | None
+    :param **kwargs: Additional keyword arguments:
+
+        * mesh_dim (int): Geometric dimension of mesh of the gmsh model or ``.msh`` file. Required if 
+          ``model`` is a :class:`gmsh.model` or a ``.msh`` file.
+        * rank (int): Rank of the MPI process used for generating from gmsh model or reading from ``.msh`` files.
+          Required if ``model`` is a :class:`gmsh.model` or a ``.msh`` file.
+        * mesh_name (str): Name (identifier) of the mesh to read from the input ``.xdmf`` file and to add to the output file.
+          Required if ``model`` is a ``.xdmf`` file.
+        * mode (str): Mode for writing mesh to ``.xdmf`` file. ``'w'`` (write) or ``'a'`` (append). 
+          Required if ``out_file`` is not ``None``.
+    
+    :returns: The created mesh data.
     :rtype: gmshio.MeshData
     """
     if isinstance(model, gmsh.model):
-        mesh_data = gmshio.model_to_mesh(model, comm, rank=rank, gdim=mesh_dim)
+        mesh_data = gmshio.model_to_mesh(model, comm, rank=kwargs["rank"], gdim=kwargs["mesh_dim"])
     elif isinstance(model, str) and model.endswith(".msh"):
-        mesh_data = gmshio.read_from_msh(model, comm, rank=rank, gdim=mesh_dim)
+        mesh_data = gmshio.read_from_msh(model, comm, rank=kwargs["rank"], gdim=kwargs["mesh_dim"])
     elif isinstance(model, str) and model.endswith(".xdmf"):
         with XDMFFile(comm, model, "r") as in_file:
-            mesh = in_file.read_mesh(name=mesh_name)
+            mesh = in_file.read_mesh(name=kwargs["mesh_name"])
             try:
-                cell_tags = in_file.read_meshtags(mesh, name=f"{mesh_name}_cells")
+                cell_tags = in_file.read_meshtags(mesh, name="{}_cells".format(kwargs["mesh_name"]))
             except RuntimeError:
-                print(f"[create_mesh] no cell tags with identifier '{mesh_name}_cells' found in the xdmf file.")
+                print("[create_mesh] no cell tags with identifier '{}_cells' found in the xdmf file.".format(kwargs["mesh_name"]))
                 cell_tags = None
             try:
-                facet_tags = in_file.read_meshtags(mesh, name=f"{mesh_name}_facets")
+                facet_tags = in_file.read_meshtags(mesh, name="{}_facets".format(kwargs["mesh_name"]))
             except RuntimeError:
-                print(f"[create_mesh] no facet tags with identifier '{mesh_name}_facets' found in the xdmf file.")
+                print("[create_mesh] no facet tags with identifier '{}_facets' found in the xdmf file.".format(kwargs["mesh_name"]))
                 facet_tags = None
             try:
-                ridge_tags = in_file.read_meshtags(mesh, name=f"{mesh_name}_ridges")
+                ridge_tags = in_file.read_meshtags(mesh, name="{}_ridges".format(kwargs["mesh_name"]))
             except RuntimeError:
-                print(f"[create_mesh] no ridge tags with identifier '{mesh_name}_ridges' found in the xdmf file.")
+                print("[create_mesh] no ridge tags with identifier '{}_ridges' found in the xdmf file.".format(kwargs["mesh_name"]))
                 ridge_tags = None
             try:
-                peak_tags = in_file.read_meshtags(mesh, name=f"{mesh_name}_peaks")
+                peak_tags = in_file.read_meshtags(mesh, name="{}_peaks".format(kwargs["mesh_name"]))
             except RuntimeError:
-                print(f"[create_mesh] no peak tags with identifier '{mesh_name}_peaks' found in the xdmf file.")
+                print("[create_mesh] no peak tags with identifier '{}_peaks' found in the xdmf file.".format(kwargs["mesh_name"]))
                 peak_tags = None
         mesh_data = gmshio.MeshData(
             mesh=mesh,
@@ -84,44 +85,45 @@ def create_mesh(
     else:
         raise ValueError("[create_mesh] model must be a gmsh.model or a filename ending with .msh or .xdmf")
 
-    mesh_data.mesh.name = mesh_name
-    if mesh_data.cell_tags is not None:
-        mesh_data.cell_tags.name = f"{mesh_name}_cells"
-    if mesh_data.facet_tags is not None:
-        mesh_data.facet_tags.name = f"{mesh_name}_facets"
-    if mesh_data.ridge_tags is not None:
-        mesh_data.ridge_tags.name = f"{mesh_name}_ridges"
-    if mesh_data.peak_tags is not None:
-        mesh_data.peak_tags.name = f"{mesh_name}_peaks"
-    for i in range(mesh_dim):
-        mesh_data.mesh.topology.create_connectivity(mesh_dim - i - 1, mesh_dim)
+    for i in range(kwargs["mesh_dim"]):
+        mesh_data.mesh.topology.create_connectivity(kwargs["mesh_dim"] - i - 1, kwargs["mesh_dim"])
 
-    if filename is not None:
-        with XDMFFile(mesh_data.mesh.comm, filename, mode) as out_file:
+    if out_file is not None:
+        mesh_data.mesh.name = kwargs["mesh_name"]
+        if mesh_data.cell_tags is not None:
+            mesh_data.cell_tags.name = "{}_cells".format(kwargs["mesh_name"])
+        if mesh_data.facet_tags is not None:
+            mesh_data.facet_tags.name = "{}_facets".format(kwargs["mesh_name"])
+        if mesh_data.ridge_tags is not None:
+            mesh_data.ridge_tags.name = "{}_ridges".format(kwargs["mesh_name"])
+        if mesh_data.peak_tags is not None:
+            mesh_data.peak_tags.name = "{}_peaks".format(kwargs["mesh_name"])
+            
+        with XDMFFile(mesh_data.mesh.comm, out_file, kwargs["mode"]) as out_file:
             out_file.write_mesh(mesh_data.mesh)
             if mesh_data.cell_tags is not None:
                 out_file.write_meshtags(
                     mesh_data.cell_tags,
                     mesh_data.mesh.geometry,
-                    geometry_xpath=f"/Xdmf/Domain/Grid[@Name='{mesh_name}']/Geometry",
+                    geometry_xpath="/Xdmf/Domain/Grid[@Name='{}']/Geometry".format(kwargs["mesh_name"]),
                 )
             if mesh_data.facet_tags is not None:
                 out_file.write_meshtags(
                     mesh_data.facet_tags,
                     mesh_data.mesh.geometry,
-                    geometry_xpath=f"/Xdmf/Domain/Grid[@Name='{mesh_name}']/Geometry",
+                    geometry_xpath="/Xdmf/Domain/Grid[@Name='{}']/Geometry".format(kwargs["mesh_name"]),
                 )
             if mesh_data.ridge_tags is not None:
                 out_file.write_meshtags(
                     mesh_data.ridge_tags,
                     mesh_data.mesh.geometry,
-                    geometry_xpath=f"/Xdmf/Domain/Grid[@Name='{mesh_name}']/Geometry",
+                    geometry_xpath="/Xdmf/Domain/Grid[@Name='{}']/Geometry".format(kwargs["mesh_name"]),
                 )
             if mesh_data.peak_tags is not None:
                 out_file.write_meshtags(
                     mesh_data.peak_tags,
                     mesh_data.mesh.geometry,
-                    geometry_xpath=f"/Xdmf/Domain/Grid[@Name='{mesh_name}']/Geometry",
+                    geometry_xpath="/Xdmf/Domain/Grid[@Name='{}']/Geometry".format(kwargs["mesh_name"]),
                 )
     return mesh_data
 
@@ -201,23 +203,32 @@ def young_poisson2stiffness(E: float, nu: float, dim: int) -> list[list[float]]:
         raise ValueError("[young_poisson2stiffness] Dimension must be 1, 2, or 3.")
 
 def relativeL2error(
-        u1: fem.Function | tuple[fem.Function, ...], 
-        u2: fem.Function | tuple[fem.Function, ...], 
+        u1: fem.Function | Sequence[fem.Function] | dict[str, fem.Function], 
+        u2: fem.Function | Sequence[fem.Function] | dict[str, fem.Function], 
         eps: float = 1e-10
     ) -> float:
     """Calculate and return the relative L2 error between two :class:`dolfinx.fem.Function`.
     
-    :param u1: First DOLFINx Function or tuple of its sub-functions (views). Also used as the reference for computing the relative error.
-    :type u1: fem.Function | tuple[fem.Function, ...]
-    :param u2: Second DOLFINx Function or tuple of its sub-functions (views). Must have the same type as ``u1``.
-    :type u2: fem.Function | tuple[fem.Function, ...]
+    :param u1: First DOLFINx Function(s). Also used as the reference for computing the relative error. Iteration
+        is performed over ``u1``.
+    :type u1: fem.Function | Iterable[fem.Function] | dict[str, fem.Function]
+    :param u2: Second DOLFINx Function(s). Must have the same type as ``u1``. Can have more items than ``u1`` and 
+        only the items corresponding to those of ``u1`` are used.
+    :type u2: fem.Function | Iterable[fem.Function] | dict[str, fem.Function]
     :param eps: Small value to avoid division by zero.
     :type eps: float
     :returns: Relative L2 error between ``u1`` and ``u2``.
     :rtype: float
     """
     err = 0.0
-    if isinstance(u1, tuple) and isinstance(u2, tuple):
+    if isinstance(u1, dict) and isinstance(u2, dict):
+        for name, u in u1.items():
+            du = u - u2[name]
+            l2_diff = u.function_space.mesh.comm.allreduce(fem.assemble_scalar(fem.form(ufl.dot(du, du) * ufl.dx)), op=MPI.SUM)
+            l2_u1 = u.function_space.mesh.comm.allreduce(fem.assemble_scalar(fem.form(ufl.dot(u, u) * ufl.dx)), op=MPI.SUM)
+            err += l2_diff / (l2_u1 + eps)
+        n_subspaces = len(u1)
+    elif isinstance(u1, Sequence) and isinstance(u2, Sequence):
         for i, u in enumerate(u1):
             du = u - u2[i]
             l2_diff = u.function_space.mesh.comm.allreduce(fem.assemble_scalar(fem.form(ufl.dot(du, du) * ufl.dx)), op=MPI.SUM)
@@ -373,16 +384,16 @@ class TMat:
 
     def setT(
             self, 
-            T: fem.Function | tuple[FormArgument, fem.FunctionSpace], 
+            T: fem.Function | tuple[FormArgument | float, fem.FunctionSpace], 
             jit_options: Optional[dict] = None,
             form_compiler_options: Optional[dict] = None,
             metadata: Optional[dict] = None
         ):
         """Attach the temperature field and assemble all the internal data for the first time.
 
-        :param T: Temperature field, represented either as a :class:`dolfinx.fem.Function` or a tuple of its
-            UFL representation and (collapsed) function space.
-        :type T: fem.Function | tuple[FormArgument, fem.FunctionSpace]
+        :param T: Temperature field, represented either as a :class:`dolfinx.fem.Function` or a tuple ``(T_, V)``,
+            where ``T_`` is a UFL expression or a float (for constant temperature) and ``V`` is its (collapsed) function space.
+        :type T: fem.Function | tuple[FormArgument | float, fem.FunctionSpace]
         :param jit_options: Options to pass to just-in-time compiler
         :type jit_options: Optional[dict]
         :param form_compiler_options: Options to pass to the form compiler
@@ -392,18 +403,18 @@ class TMat:
         """
         if isinstance(T, tuple):
             T_ = T[0]
-            V_ = T[1]
+            V = T[1]
         else:
             T_ = T
-            V_ = T.function_space
+            V = T.function_space
 
-        u = ufl.TrialFunction(V_)
-        v = ufl.TestFunction(V_)
-        dx = ufl.Measure("dx", domain=V_.mesh, metadata=metadata)
+        u = ufl.TrialFunction(V)
+        v = ufl.TestFunction(V)
+        dx = ufl.Measure("dx", domain=V.mesh, metadata=metadata)
         self._formT = fem.form(T_ * u * v * dx, jit_options=jit_options, form_compiler_options=form_compiler_options)
         self._T = assemble_matrix(self._formT)
         self._T.assemble()  # This finalizes the matrix assembly (including update ghosts)
-        self._pcT = PETSc.PC().create(V_.mesh.comm)
+        self._pcT = PETSc.PC().create(V.mesh.comm)
         self._pcT.setOperators(self._T)
 
         self._form_lumpedT = fem.form(T_ * v * dx, jit_options=jit_options, form_compiler_options=form_compiler_options)
@@ -413,7 +424,7 @@ class TMat:
 
         self._M = assemble_matrix(fem.form(u * v * dx, jit_options=jit_options, form_compiler_options=form_compiler_options))
         self._M.assemble()
-        self._kspM = PETSc.KSP().create(V_.mesh.comm)
+        self._kspM = PETSc.KSP().create(V.mesh.comm)
         self._kspM.setOperators(self._M)
         pc = self._kspM.getPC()
         pc.setType("cholesky")
@@ -464,7 +475,9 @@ class TMat:
         self._kspM.matSolve(B, X)
 
     def assemble_lumpedT(self):
-        """Assemble the lumped temperature matrix :attr:`TMat.lumpedT` for the attached temperature field with the current value."""
+        """Assemble the lumped temperature matrix :attr:`lumpedT` for the attached temperature field with the current value.
+        Not needed to call this function after :meth:`setT` unless the temperature field has changed.
+        """
         # Zeroing is important before re-assembling
         # self.lumpedT.zeroEntries()  # This does not affect ghost entries
         with self.lumpedT.localForm() as local_vec: # Local form includes ghost entries
