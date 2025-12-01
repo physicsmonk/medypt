@@ -15,7 +15,7 @@ from maters import KB_E, VO2
 
 model = IMTModel()
 
-msh = "mesh.msh"  # Or None if generating mesh within this script using gmsh
+msh = "mesh.msh"  # "mesh.msh"; None if generating mesh within this script using gmsh
 
 has_bl = False
 lx = 10.0
@@ -50,6 +50,7 @@ model.opts["rand_seed"] = 321245
 model.opts["verbose"] = True
 model.opts["save_period"] = 10
 model.opts["has_thermal_noise"] = True
+model.opts["t_step_rtol"] = 0.01
 
 T_i = 300.0 * KB_E
 mu_e_i = 0.0
@@ -58,6 +59,8 @@ op_i = np.array([-0.5, 0.0, -0.5, 0.0, 0.5, 0.0, 0.5, 0.0])
 phi_i = 0.0
 tspan = 0.001
 dt = 1e-5
+
+model.params["temperature"] = T_i
 
 
 l_bc = l_bl1 if has_bl else lc
@@ -163,7 +166,7 @@ if msh is None:
         msh.mesh.generate(3)
         gmsh.write("mesh.msh")
 
-model.load_mesh(MPI.COMM_WORLD, msh, 3, rank=0)
+model.load_mesh(MPI.COMM_WORLD, msh, mesh_dim=3, rank=0)
 
 if isinstance(msh, gmsh.model):
     gmsh.finalize()
@@ -171,8 +174,20 @@ if isinstance(msh, gmsh.model):
 
 vo2 = VO2()
 
-model.load_physics(["op", "T", "u", "eh", "phi"], op_dim=8, intrinsic_f=vo2.intrinsic_f, charge_gap=vo2.charge_gap,
-                   trans_strn=vo2.trans_strn, gap_center=lambda op: 0.0)
+model.load_physics(
+    [
+        "op", 
+       # "T", 
+        "u", 
+       # "eh", 
+       # "phi"
+    ], 
+    op_dim=8, 
+    intrinsic_f=vo2.intrinsic_f, 
+    charge_gap=vo2.charge_gap,
+    trans_strn=vo2.trans_strn, 
+    gap_center=lambda op: 0.0
+)
 
 u_bott = Function(model.fields["u"].function_space)
 u_bott.interpolate(lambda x: np.vstack((substr_strain[0] * x[0] + substr_strain[2] * x[1],
@@ -187,12 +202,12 @@ def T_flux(fields):
     return h * (fields["T"] - T_i)
 bcs = [
     ("u", bdr_tags["bottom"], u_bott), 
-    ("phi", bdr_tags["front"], volt),
-    ("ge", bdr_tags["left"], flux_e),
-    ("gh", bdr_tags["left"], flux_h),
-    ("ge", bdr_tags["right"], flux_e),
-    ("gh", bdr_tags["right"], flux_h),
-    ("T", bdr_tags["bottom"], T_flux)
+   # ("phi", bdr_tags["front"], volt),
+   # ("ge", bdr_tags["left"], flux_e),
+   # ("gh", bdr_tags["left"], flux_h),
+   # ("ge", bdr_tags["right"], flux_e),
+   # ("gh", bdr_tags["right"], flux_h),
+   # ("T", bdr_tags["bottom"], T_flux)
 ]
 model.set_bcs(bcs)
 
@@ -212,10 +227,10 @@ def phi0(x):
 ics = {
     "op": op0,
     "u": u_bott,
-    "phi": phi0,
-    "T": T0,
-    "ge": ge0,
-    "gh": gh0
+   # "phi": phi0,
+   # "T": T0,
+   # "ge": ge0,
+   # "gh": gh0
 }
 
 model.solve(tspan, dt, ics)

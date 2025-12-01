@@ -7,7 +7,9 @@ from mpi4py import MPI
 
 from petsc4py import PETSc
 
-# from basix.ufl import _ElementBase
+import gmsh
+
+from basix.ufl import element
 from ufl import Measure
 from ufl.argument import Argument
 from ufl.core.expr import Expr
@@ -17,7 +19,7 @@ from dolfinx.io.gmsh import MeshData
 from dolfinx.io import XDMFFile, VTXWriter
 from dolfinx.fem.petsc import NonlinearProblem
 
-from utils import relativeL2error, TMat, gen_therm_noise
+from utils import create_mesh, relativeL2error, TMat, gen_therm_noise
 
 class ModelBase:
     """Base class for phase-field models."""
@@ -25,24 +27,24 @@ class ModelBase:
     """A dictionary of numerical options. Initialized with default values and can be modified in subclasses.
     Contents include:
 
-    * ``has_thermal_noise`` (bool): Whether to include thermal noise. Default is ``False``.
-    * ``rand_seed`` (int): Random seed for thermal noise generation. Default is ``8347142``.
-    * ``quadr_deg`` (int): Quadrature degree for numerical integration. Default is ``6``.
-    * ``petsc`` (dict): A dictionary of PETSc solver options (see `this`_ for example). Default to use 
+    * ``'has_thermal_noise'`` (bool): Whether to include thermal noise. Default is ``False``.
+    * ``'rand_seed'`` (int): Random seed for thermal noise generation. Default is ``8347142``.
+    * ``'quadr_deg'`` (int): Quadrature degree for numerical integration. Default is ``6``.
+    * ``'petsc'`` (dict): A dictionary of PETSc solver options (see `this`_ for example). Default to use 
       Newton nonlinear solver with MUMPS direct linear solver.
-    * ``t_step_relative_tol`` (float): Relative tolerance for time discretization error. Default is ``0.01``.
-    * ``dt_min_rescalar`` (float): Minimum factor to reduce time step upon failure. Default is ``0.2``.
-    * ``dt_max_rescalar`` (float): Maximum factor to increase time step upon success. Default is ``4.0``.
-    * ``dt_reducer`` (float): Factor to reduce time step rescalar. Default is ``0.9``.
-    * ``max_successive_fail`` (int): Maximum number of successive failures before stopping. Default is ``100``.
-    * ``min_dt`` (float): Minimum time step size. Default is ``1e-9``.
-    * ``max_dt`` (float): Maximum time step size. Default is ``10.0``.
-    * ``save_period`` (int): Time step period for saving solution. Default is ``1``.
-    * ``log_file_name`` (str): File name for logging evolution. Default is ``evolution.txt``.
-    * ``sol_file_name`` (str): File name for saving solution. Default is ``solution.xdmf``. If the suffix is not ``.xdmf``
+    * ``'t_step_rtol'`` (float): Relative tolerance for time discretization error. Default is ``0.01``.
+    * ``'dt_min_rescalar'`` (float): Minimum factor to reduce time step upon failure. Default is ``0.2``.
+    * ``'dt_max_rescalar'`` (float): Maximum factor to increase time step upon success. Default is ``4.0``.
+    * ``'dt_reducer'`` (float): Factor to reduce time step rescalar. Default is ``0.9``.
+    * ``'max_successive_fail'`` (int): Maximum number of successive failures before stopping. Default is ``100``.
+    * ``'min_dt'`` (float): Minimum time step size. Default is ``1e-9``.
+    * ``'max_dt'`` (float): Maximum time step size. Default is ``10.0``.
+    * ``'save_period'`` (int): Time step period for saving solution. Default is ``1``.
+    * ``'log_file_name'`` (str): File name for logging evolution. Default is ``evolution.txt``.
+    * ``'sol_file_name'`` (str): File name for saving solution. Default is ``solution.xdmf``. If the suffix is not ``.xdmf``
       or if no suffix, save solutions using :class:`dolfinx.io.VTXWriter` into a folder with the given name.
-    * ``verbose`` (bool): Whether to print verbose output. Default is ``False``.
-
+    * ``'verbose'`` (bool): Whether to print verbose output. Default is ``False``.
+    
     .. _this: https://jsdokken.com/dolfinx-tutorial/chapter2/nonlinpoisson_code.html#newtons-method
     """
     params: dict[str, Any]
@@ -89,7 +91,7 @@ class ModelBase:
                 "pc_factor_mat_solver_type": "mumps",
                 "snes_monitor": None,
             },
-            "t_step_relative_tol": 0.01, 
+            "t_step_rtol": 0.01, 
             "dt_min_rescalar": 0.2, 
             "dt_max_rescalar": 4.0, 
             "dt_reducer": 0.9, 
@@ -114,7 +116,31 @@ class ModelBase:
         self._problem = None
         self._exprs2save = {}
         self._monitor = {}
+    
+    def load_mesh(
+            self, 
+            comm: MPI.Comm,  
+            mesh: gmsh.model | str, 
+            **kwargs: Any
+        ):
+        """Load the mesh data.
         
+        :param comm: MPI communicator.
+        :type comm: MPI.Comm
+        :param mesh: Gmsh model or a file name with the ``.msh`` or ``.xdmf`` format.
+        :type mesh: gmsh.model | str
+        :param **kwargs: Additional keyword arguments passed to :func:`create_mesh`:
+
+            * mesh_dim (int): Geometric dimension of the mesh. Required when ``mesh`` is a gmsh model or a ``.msh`` file.
+            * rank (int): Rank of the MPI process used for generating from gmsh model or reading from ``.msh`` files.
+              Required when ``mesh`` is a gmsh model or a ``.msh`` file.
+            * mesh_name (str): Name (identifier) of the mesh to read from the ``.xdmf`` file. Required when ``mesh`` is
+              a ``.xdmf`` file.
+              
+        :returns: None
+        """
+        self.mesh_data = create_mesh(comm, mesh, **kwargs)
+
     def set_bcs(self, bcs: list[tuple[str, int | Callable[[Any], Any], fem.Constant | fem.Function | np.ndarray | Callable[[Any], Any]]]):
         """Generate boundary conditions.
 
@@ -131,6 +157,7 @@ class ModelBase:
               will have a calling signature ``bc(fields)``, where ``fields`` is treated as a tuple containing the splitted fields. 
               It covers boundary conditions of the Neumann, Robin, and other general types implemented using the Nistche's trick 
               [10.1016/j.camwa.2022.11.025; 10.1103/PhysRevApplied.17.014042]. The default is the zero-flux boundary condition.
+
         :type bcs: list[tuple[str, int | Callable[[Any], Any], fem.Constant | fem.Function | np.ndarray | Callable[[Any], Any]]]
 
         .. tip::
@@ -138,7 +165,7 @@ class ModelBase:
             One can make an evolving boundary condition by defining a global :class:`dolfinx.fem.Constant` or 
             :class:`dolfinx.fem.Function` object and using it in the boundary-condition expression. One will 
             then need to define an update function to update the value of the global object for a given time 
-            and pass that function to :meth:`ModelBase.solve`.
+            and pass that function to :meth:`solve`.
         """
         facet_dim = self.mesh_data.mesh.topology.dim - 1
         ds = Measure("ds", domain=self.mesh_data.mesh, subdomain_data=self.mesh_data.facet_tags, 
@@ -163,7 +190,7 @@ class ModelBase:
                     self._weak_forms[name] += bc(self.fields) * self._test_funcs[name] * ds(tag)
 
     def create_problem(self):
-        """Create the finite element problem that is ready for solving."""
+        """Create the finite element problem that is ready to be solved."""
         names = sorted(self._weak_forms)
         F = [self._weak_forms[name] for name in names]
         u = [self.fields[name] for name in names]
@@ -233,8 +260,13 @@ class ModelBase:
             folder.mkdir(parents=True, exist_ok=True)
             sol_file = {}  # Store different solutions into separate files because they could be based on different finite elements
         if self.opts["has_thermal_noise"]:
+            has_T = ("T" in self.fields)
+            T = self.fields["T"] if has_T else (
+                self.params["temperature"], 
+                fem.functionspace(self.mesh_data.mesh, element("CG", self.mesh_data.mesh.basix_cell(), 1, dtype=default_real_type))
+            )
             Tmat = TMat()
-            Tmat.setT(self.fields["T"])
+            Tmat.setT(T)
             if isinstance(self.params["op_relax_rate"], Iterable):
                 dissipU = np.linalg.cholesky(np.asarray(self.params["op_relax_rate"]), upper=True)
             else:
@@ -389,9 +421,9 @@ class ModelBase:
                     )
                 # Calculate the backward Euler time integration error and time step changing factor
                 rel_err = relativeL2error(u2acc, self.fields, eps=eps)  # Only taking into account fields with time derivative terms in their equations
-                dt_factor = min(max(self.opts["dt_reducer"] * np.sqrt(self.opts["t_step_relative_tol"] / max(rel_err, eps)), 
+                dt_factor = min(max(self.opts["dt_reducer"] * np.sqrt(self.opts["t_step_rtol"] / max(rel_err, eps)), 
                                     self.opts["dt_min_rescalar"]), self.opts["dt_max_rescalar"])
-                if rel_err > self.opts["t_step_relative_tol"]:
+                if rel_err > self.opts["t_step_rtol"]:
                     successive_fail += 1
                     t_fail += 1
                     for name, func in self.fields.items():
@@ -476,7 +508,8 @@ class ModelBase:
 
             # Update thermal noise using explicit scheme, so it needs to be done after successful solving for the last time step
             if self.opts["has_thermal_noise"]:
-                Tmat.assemble_lumpedT()
+                if has_T:
+                    Tmat.assemble_lumpedT()
                 gen_therm_noise(Tmat, dissipU, rng, self._noise)
         
         log_file.close()
