@@ -301,7 +301,10 @@ class IMTModel(model.ModelBase):
 
         # Add natural boundary conditions
         for i, tag, bc in self._bcs_natural:
-            F_field += self._dt * bc * v[i] * ds(tag)
+            if i == self._field_idx["u"] or i == self._field_idx["phi"]:
+                F_field += bc * v[i] * ds(tag)
+            else:
+                F_field += self._dt * bc * v[i] * ds(tag)
 
         facet_norm = ufl.FacetNormal(self.mesh_data.mesh)
         F_j0 = (self.sub_fields_ufl["j0"] - ufl.dot(j, facet_norm)) * v_j0 * ds(0)
@@ -337,8 +340,7 @@ class IMTModel(model.ModelBase):
         vol = self.mesh_data.mesh.comm.allreduce(fem.assemble_scalar(fem.form(fem.Constant(self.mesh_data.mesh, default_real_type(1.0)) * dx)), op=MPI.SUM)
         s0 = self.mesh_data.mesh.comm.allreduce(fem.assemble_scalar(fem.form(fem.Constant(self.mesh_data.mesh, default_real_type(1.0)) * ds(0))), op=MPI.SUM)
         self._monitor = {
-            "eop_avg": fem.form(ufl.sqrt(op[0] * op[0] + op[1] * op[1] + op[2] * op[2] + op[3] * op[3]) / vol * dx),
-            "sop_avg": fem.form(ufl.sqrt(op[4] * op[4] + op[5] * op[5] + op[6] * op[6] + op[7] * op[7]) / vol * dx),
+            "op_avg": fem.form(ufl.sqrt(ufl.inner(op, op)) / vol * dx),
             "Eg_avg": fem.form(Eg / vol * dx),
             "vMs_avg": fem.form(stress_vM / vol * dx),
             "T_avg": fem.form(self.sub_fields_ufl["T"] / vol * dx),
