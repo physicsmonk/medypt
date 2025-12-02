@@ -1,6 +1,3 @@
-import sys
-sys.path.append('../src')
-
 import numpy as np
 from mpi4py import MPI
 
@@ -9,15 +6,20 @@ import gmsh
 from dolfinx import default_real_type
 from dolfinx.fem import Function, Constant
 
-from imt import IMTModel
-from maters import KB_E, VO2
+from medypt.imt import IMTModel
+from medypt.maters import KB_E, VO2
 
 
+p_rank = MPI.COMM_WORLD.Get_rank()
+
+#--------- Create the insulator-metal transition (IMT) model ---------
 model = IMTModel()
 
-msh = "mesh.msh"  # "mesh.msh"; None if generating mesh within this script using gmsh
+# String indicating mesh file name or None if generating mesh within this script using gmsh
+msh = None
 
-has_bl = False
+#--------- Specify geometry and mesh parameters ---------
+has_bl = False  # whether to include boundary layers when generating mesh
 lx = 10.0
 ly = 5.0
 lz = 2.0
@@ -36,6 +38,7 @@ bdr_tags = {
     "top": 5
 }
 
+#--------- Specify physical parameters and simulation options ---------
 substr_strain = [0.005, 0.005, 0.0]  # in-plane substrate strain: [e_xx, e_yy, e_xy]
 
 nitsche_eps = 1e-5
@@ -65,8 +68,7 @@ model.params["temperature"] = T_i
 
 l_bc = l_bl1 if has_bl else lc
 
-p_rank = MPI.COMM_WORLD.Get_rank()
-
+#--------- Generate or load mesh ---------
 if msh is None:
     gmsh.initialize()
     msh = gmsh.model()
@@ -166,21 +168,24 @@ if msh is None:
         msh.mesh.generate(3)
         gmsh.write("mesh.msh")
 
+#--------- Load mesh into the IMT model ---------
 model.load_mesh(MPI.COMM_WORLD, msh, mesh_dim=3, rank=0)
 
 if isinstance(msh, gmsh.model):
     gmsh.finalize()
 
-
+#--------- Use an example material vanadium dioxide (VO2) ---------
 vo2 = VO2()
 
+#--------- Load desired physics components ---------
 model.load_physics(
-    [
+    [ # Uncomment the physics components you want to include
         "op", 
        # "T", 
         "u", 
        # "eh", 
-       # "phi"
+       # "phi",
+       # "j0"
     ], 
     op_dim=8, 
     intrinsic_f=vo2.intrinsic_f, 
@@ -189,6 +194,7 @@ model.load_physics(
     gap_center=lambda op: 0.0
 )
 
+#--------- Set boundary conditions ---------
 u_bott = Function(model.fields["u"].function_space)
 u_bott.interpolate(lambda x: np.vstack((substr_strain[0] * x[0] + substr_strain[2] * x[1],
                                         substr_strain[2] * x[0] + substr_strain[1] * x[1],
@@ -200,7 +206,7 @@ def flux_h(fields):
     return n_ref * mob / (nitsche_eps * l_bc) * (fields["T"] * fields["gh"] + vo2.charge_gap(fields["op"]) / 2.0)
 def T_flux(fields):
     return h * (fields["T"] - T_i)
-bcs = [
+bcs = [ # Uncomment the boundary conditions you want to apply
     ("u", bdr_tags["bottom"], u_bott), 
    # ("phi", bdr_tags["front"], volt),
    # ("ge", bdr_tags["left"], flux_e),
@@ -211,8 +217,10 @@ bcs = [
 ]
 model.set_bcs(bcs)
 
+#--------- Create finite element problem ---------
 model.create_problem()
 
+#--------- Set initial conditions and solve the problem ---------
 def op0(x):
     return np.full((8, x.shape[1]), op_i[:, np.newaxis])
 def T0(x):
@@ -224,7 +232,7 @@ def gh0(x):
 def phi0(x):
     return np.full(x.shape[1], phi_i)
 
-ics = {
+ics = { # Uncomment the initial conditions you want to apply
     "op": op0,
     "u": u_bott,
    # "phi": phi0,

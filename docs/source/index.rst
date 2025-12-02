@@ -5,9 +5,10 @@
 
 MEDYPT documentation
 ====================
+
 MEDYPT is a Python library for simulating **ME**\ soscopic **DY**\ namics of
 **P**\ hase **T**\ ransitions in materials.
-It uses finite element method implemented in `FEniCSx`_ to solve coupled field equations.
+It uses finite element method implemented in `FEniCSx <https://fenicsproject.org/>`_ to solve coupled field equations.
 Typical workflow is:
 
 #. Create mesh by users
@@ -18,12 +19,23 @@ Typical workflow is:
 #. Create finite element problem using :py:meth:`~medypt.model.ModelBase.create_problem`
 #. Solve the problem using :py:meth:`~medypt.model.ModelBase.solve`
 
-.. _FEniCSx: https://fenicsproject.org/
-
 Currently MEDYPT only implemented insulator-metal transition (IMT) model.
 Plan to implement more phase-field models such as that of ferroelectrics in the future.
+
+Installation
+------------
+
+MEDYPT is a pure Python package and is currently on `TestPyPI <https://test.pypi.org/project/medypt/>`_.
+You can install it using pip:
+
+.. code-block:: bash
+
+   pip install --index-url https://test.pypi.org/simple/ --no-deps medypt
+
+But remember to install petsc4py, FEniCSx, and scifem first.
 
 .. toctree::
    :maxdepth: 2
    :caption: Contents:
 
+   examples
