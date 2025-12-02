@@ -1,3 +1,5 @@
+"""Base class for phase-field models."""
+
 from typing import Any
 from collections.abc import Callable, Iterable
 from pathlib import Path
@@ -19,7 +21,7 @@ from dolfinx.io.gmsh import MeshData
 from dolfinx.io import XDMFFile, VTXWriter
 from dolfinx.fem.petsc import NonlinearProblem
 
-from utils import create_mesh, relativeL2error, TMat, gen_therm_noise
+from .utils import create_mesh, relativeL2error, TMat, gen_therm_noise
 
 class ModelBase:
     """Base class for phase-field models."""
@@ -102,7 +104,7 @@ class ModelBase:
             "log_file_name": "evolution.txt", 
             "sol_file_name": "solution.xdmf", 
             "verbose": False
-        } # Numerical option dictionary
+        }
         self.params = {}
         self.mesh_data = None
         self.fields = {}
@@ -129,7 +131,7 @@ class ModelBase:
         :type comm: MPI.Comm
         :param mesh: Gmsh model or a file name with the ``.msh`` or ``.xdmf`` format.
         :type mesh: gmsh.model | str
-        :param **kwargs: Additional keyword arguments passed to :func:`create_mesh`:
+        :param kwargs: Additional keyword arguments passed to :py:func:`~medypt.utils.create_mesh`:
 
             * mesh_dim (int): Geometric dimension of the mesh. Required when ``mesh`` is a gmsh model or a ``.msh`` file.
             * rank (int): Rank of the MPI process used for generating from gmsh model or reading from ``.msh`` files.
@@ -137,12 +139,13 @@ class ModelBase:
             * mesh_name (str): Name (identifier) of the mesh to read from the ``.xdmf`` file. Required when ``mesh`` is
               a ``.xdmf`` file.
               
-        :returns: None
+        :type kwargs: dict[str, Any]
+        :returns: ``None``
         """
         self.mesh_data = create_mesh(comm, mesh, **kwargs)
 
     def set_bcs(self, bcs: list[tuple[str, int | Callable[[Any], Any], fem.Constant | fem.Function | np.ndarray | Callable[[Any], Any]]]):
-        """Generate boundary conditions.
+        """Set essential and natural boundary conditions.
 
         :param bcs: A list of tuples specifying boundary conditions. Each tuple is ``(name, b, bc)``, where:
 
@@ -165,10 +168,10 @@ class ModelBase:
 
         .. tip::
 
-            One can make an evolving boundary condition by defining a global :class:`dolfinx.fem.Constant` or 
-            :class:`dolfinx.fem.Function` object and using it in the boundary-condition expression. One will 
+            One can make an evolving boundary condition by defining a global :py:class:`dolfinx.fem.Constant` or 
+            :py:class:`dolfinx.fem.Function` object and using it in the boundary-condition expression. One will 
             then need to define an update function to update the value of the global object for a given time 
-            and pass that function to :meth:`solve`.
+            and pass that function to :py:meth:`~medypt.model.ModelBase.solve`.
         """
         facet_dim = self.mesh_data.mesh.topology.dim - 1
         ds = Measure("ds", domain=self.mesh_data.mesh, subdomain_data=self.mesh_data.facet_tags, 
@@ -220,12 +223,12 @@ class ModelBase:
             the initial value for that field. The callables have a calling signature ``ic(x)``, where ``x`` 
             is the spatial coordinate treated as a 2D numpy array with shape ``(geom_dim, num_points)``. 
             Defaults to ``None`` to use the current values of the fields.
-        :type ics: dict[str, Callable[[Any], Any] | Function] | None
+        :type ics: dict[str, Callable[[Any], Any] | fem.Function] | None
         :param update: A callable to update any time-dependent parameters (must be defined a priori as global 
-            :class:`dolfinx.fem.Constant` or :class:`dolfinx.fem.Function`) at each time step. It takes the 
+            :py:class:`dolfinx.fem.Constant` or :py:class:`dolfinx.fem.Function`) at each time step. It takes the 
             current time as the only argument. Defaults to a no-op function.
         :type update: Callable[[float], None]
-        :returns: True if the solve completed successfully, False otherwise.
+        :returns: ``True`` if the solve completed successfully, ``False`` otherwise.
         :rtype: bool
         """
         if dt is not None:

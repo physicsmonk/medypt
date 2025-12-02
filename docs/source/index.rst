@@ -11,13 +11,17 @@ It uses finite element method implemented in `FEniCSx`_ to solve coupled field e
 Typical workflow is:
 
 #. Create mesh by users
-#. Load mesh using :meth:`load_mesh`
-#. Load physics components using :meth:`load_physics`
-#. Set boundary conditions using :meth:`set_bcs`
-#. Create finite element problem using :meth:`create_problem`
-#. Solve the problem using :meth:`solve`
+#. Load mesh using :py:meth:`~medypt.model.ModelBase.load_mesh`
+#. Set physical parameters using :py:attr:`~medypt.imt.IMTModel.params` and numerical options using :py:attr:`~medypt.model.ModelBase.opts`
+#. Load physics components using :py:meth:`~medypt.imt.IMTModel.load_physics`
+#. Set boundary conditions using :py:meth:`~medypt.model.ModelBase.set_bcs`
+#. Create finite element problem using :py:meth:`~medypt.model.ModelBase.create_problem`
+#. Solve the problem using :py:meth:`~medypt.model.ModelBase.solve`
 
 .. _FEniCSx: https://fenicsproject.org/
+
+Currently MEDYPT only implemented insulator-metal transition (IMT) model.
+Plan to implement more phase-field models such as that of ferroelectrics in the future.
 
 .. toctree::
    :maxdepth: 2

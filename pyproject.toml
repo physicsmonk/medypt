@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools >= 77.0.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "medypt"
+version = "0.0.1"
+dependencies = [
+    "fenics-dolfinx == 0.10.0",
+    "fenics-basix == 0.10.0",
+    "fenics-ffcx == 0.10.0",
+    "fenics-ufl == 2025.2.0",
+    "scifem == 0.14.0",
+    "gmsh >= 4.15.0",
+    "mpi4py >= 4.1.1",
+    "numpy >= 2.3.5",
+    "petsc4py >= 3.24.1",
+]
+authors = [
+  { name="Yin Shi", email="yin.shi1@icloud.com" },
+]
+description = "Python library for simulating mesoscopic dynamics of phase transitions in materials"
+readme = "README.md"
+requires-python = ">=3.9"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+license = "MIT"
+license-files = ["LICEN[CS]E*"]
+
+[project.urls]
+Homepage = "https://github.com/physicsmonk/medypt"
+Documentation = "https://medypt.readthedocs.io/en/latest/"
+Issues = "https://github.com/physicsmonk/medypt/issues"

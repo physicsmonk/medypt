@@ -1,23 +1,28 @@
-from collections.abc import Callable, Sequence, Iterable
+"""Convenient tools for the package."""
+
+from collections.abc import Callable, Sequence
 from typing import Optional, Any
 from mpi4py import MPI
 
 import numpy as np
-from numpy.random import Generator, default_rng
+from numpy.random import Generator
 
-import gmsh  # type: ignore
+import gmsh
 
 from petsc4py import PETSc
 
 import ufl
 from ufl.core.expr import Expr
 from ufl.core.terminal import FormArgument
-from dolfinx import fem, default_scalar_type
+from dolfinx import fem
 from dolfinx.fem.petsc import assemble_matrix, assemble_vector
 from dolfinx.io import XDMFFile
 from dolfinx.io import gmsh as gmshio
 
-# Copied from https://docs.fenicsproject.org/dolfinx/main/python/demos/demo_gmsh.html and modified.
+
+SQRT_PI = 1.77245385091
+"""Square root of pi."""
+
 def create_mesh(
         comm: MPI.Comm, 
         model: gmsh.model | str, 
@@ -33,19 +38,24 @@ def create_mesh(
     :type model: gmsh.model | str
     :param out_file: ``.xdmf`` file name for writing. Default to ``None`` for not writing to ``.xdmf`` file.
     :type out_file: str | None
-    :param **kwargs: Additional keyword arguments:
+    :param kwargs: Additional keyword arguments:
 
         * mesh_dim (int): Geometric dimension of mesh of the gmsh model or ``.msh`` file. Required if 
-          ``model`` is a :class:`gmsh.model` or a ``.msh`` file.
+          ``model`` is a :py:class:`gmsh.model` or a ``.msh`` file.
         * rank (int): Rank of the MPI process used for generating from gmsh model or reading from ``.msh`` files.
-          Required if ``model`` is a :class:`gmsh.model` or a ``.msh`` file.
+          Required if ``model`` is a :py:class:`gmsh.model` or a ``.msh`` file.
         * mesh_name (str): Name (identifier) of the mesh to read from the input ``.xdmf`` file and to add to the output file.
           Required if ``model`` is a ``.xdmf`` file.
         * mode (str): Mode for writing mesh to ``.xdmf`` file. ``'w'`` (write) or ``'a'`` (append). 
           Required if ``out_file`` is not ``None``.
     
+    :type kwargs: dict[str, Any]
     :returns: The created mesh data.
     :rtype: gmshio.MeshData
+
+    .. attention::
+
+        This function is copied from https://docs.fenicsproject.org/dolfinx/main/python/demos/demo_gmsh.html and modified.
     """
     if isinstance(model, gmsh.model):
         mesh_data = gmshio.model_to_mesh(model, comm, rank=kwargs["rank"], gdim=kwargs["mesh_dim"])
@@ -137,8 +147,7 @@ def f1_2(x: Any, exp: Callable = ufl.exp) -> Any:
     :returns: Approximated Fermi-Dirac integral of order 1/2 at ``x``.
     :rtype: Any
     """
-    sqrt_pi = 1.77245385091
-    return 1.0 / (exp(-x) + 3.0 * sqrt_pi / 4.0 * (4.0 + x * x) ** (-0.75))
+    return 1.0 / (exp(-x) + 3.0 * SQRT_PI / 4.0 * (4.0 + x * x) ** (-0.75))
 
 def ufl_mat2voigt4strain(eps: Expr) -> Expr:
     """Convert a UFL strain matrix to Voigt notation (a UFL vector).
@@ -207,7 +216,7 @@ def relativeL2error(
         u2: fem.Function | Sequence[fem.Function] | dict[str, fem.Function], 
         eps: float = 1e-10
     ) -> float:
-    """Calculate and return the relative L2 error between two :class:`dolfinx.fem.Function`.
+    """Calculate and return the relative L2 error between two DOLFINx Functions.
     
     :param u1: First DOLFINx Function(s). Also used as the reference for computing the relative error. Iteration
         is performed over ``u1``.
@@ -247,10 +256,9 @@ def relativeL2error(
         raise TypeError("[relativeL2error] u1 and u2 must be both fem.Function or both tuple of fem.Function.")
     return np.sqrt(err / n_subspaces)
 
-# Copied from http://jsdokken.com/FEniCS23-tutorial/src/approximations.html
 class Projector:
-    """
-    Projector for a given function.
+    """Projector for a given function.
+    
     Solves Ax=b, where
 
     .. highlight:: python
@@ -267,6 +275,10 @@ class Projector:
     :param jit_options: Options to pass to just in time compiler
     :param form_compiler_options: Options to pass to the form compiler
     :param metadata: Data to pass to the integration measure
+
+    .. attention::
+
+        This class is copied from http://jsdokken.com/FEniCS23-tutorial/src/approximations.html
     """
 
     _A: PETSc.Mat  # The mass matrix
@@ -351,12 +363,11 @@ class Projector:
         self._ksp.destroy()
 
 class TMat:
-    """Class to assemble and store temperature matrix for a given function space and to provide Cholesky 
-    decomposition for calculating properly correlated noise out of an uncorrelated noise. The temperature
-    matrix T_ij is defined as: ∫ T(x) v_i(x) v_j(x) dx, where T(x) is the temperature field and v_i(x), v_j(x) are
-    the basis functions of the function space.
-
-    Currently, parallel backward solving for Cholesky factorization through PETSc is only supported by MKL CPARDISO solver.
+    """Assemble and store temperature matrix for a given function space.
+     
+    It provides Cholesky decomposition and lumped temperature/mass matrix for calculating properly correlated noise 
+    out of an uncorrelated noise. The temperature matrix T_ij is defined as: ∫ T(x) v_i(x) v_j(x) dx, where T(x) is 
+    the temperature field and v_i(x), v_j(x) are the basis functions of the function space.
 
     :var lumpedT: The lumped temperature matrix (a vector).
     :vartype lumpedT: PETSc.Vec
@@ -445,13 +456,14 @@ class TMat:
         self._pcT.setType(type)
         self._pcT.setUp() # ensure factorization is formed
 
-    def get_factorT(self) -> PETSc.Mat:
-        """Get the factor matrix of the temperature matrix.
+    # This returned factor matrix is not the genuine triangular factor matrix, so not really useful.
+    # def get_factorT(self) -> PETSc.Mat:
+    #     """Get the factor matrix of the temperature matrix.
         
-        :returns: The factor matrix of the temperature matrix.
-        :rtype: PETSc.Mat
-        """
-        return self._pcT.getFactorMatrix()
+    #     :returns: The factor matrix of the temperature matrix.
+    #     :rtype: PETSc.Mat
+    #     """
+    #     return self._pcT.getFactorMatrix()
     
     def solve_backwardT(self, b: PETSc.Vec, x: PETSc.Vec):
         """Given the factored temperature matrix T = L U, solve the system U x = b.
@@ -460,6 +472,10 @@ class TMat:
         :type b: PETSc.Vec
         :param x: Solution vector.
         :type x: PETSc.Vec
+
+        .. caution::
+    
+            Currently, parallel backward solving for Cholesky factorization through PETSc is only supported by MKL CPARDISO solver.
         """
         L = self._pcT.getFactorMatrix()
         L.solveBackward(b, x)
@@ -475,8 +491,11 @@ class TMat:
         self._kspM.matSolve(B, X)
 
     def assemble_lumpedT(self):
-        """Assemble the lumped temperature matrix :attr:`lumpedT` for the attached temperature field with the current value.
-        Not needed to call this function after :meth:`setT` unless the temperature field has changed.
+        """Assemble the lumped temperature matrix :py:attr:`lumpedT` for the attached temperature field with the current value.
+        
+        .. hint::
+
+            No need to call this function after :py:meth:`~medypt.utils.TMat.setT` unless the temperature field has changed.
         """
         # Zeroing is important before re-assembling
         # self.lumpedT.zeroEntries()  # This does not affect ghost entries
@@ -507,14 +526,16 @@ def gen_therm_noise(
         noise: fem.Function
     ):
     """Generate thermal noise based on the fluctuation-dissipation theorem.
+
     It is calculated as: M w = √2 A η L^T, where M is the mass matrix and A, L are the Cholesky factors of the temperature
     and dissipation matrices, respectively. η is a matrix of shape ``(Tmat_dim, dissipUmat_dim)`` containing
     uncorrelated standard normal random numbers, and w of the same shape is the *DOFs* of the proper thermal noise function.
     
-    .. note::
+    .. attention::
+
         Currently only use method of lumped temperature and mass matrices for efficiency.
 
-    :param Tmat: Assembled :class:`TMat` (temperature matrix) object.
+    :param Tmat: Assembled temperature matrix.
     :type Tmat: TMat
     :param dissipUmat: Upper-triangular Cholesky factor of the dissipation matrix. Can be a scalar for isotropic dissipation.
     :type dissipUmat: Any

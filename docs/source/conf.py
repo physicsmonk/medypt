@@ -20,7 +20,8 @@ author = 'Yin Shi'
 extensions = [
     'autoapi.extension',
     # 'sphinx.ext.autodoc',
-    'sphinx_rtd_theme'
+    'sphinx_rtd_theme',
+    'sphinx.ext.intersphinx',
 ]
 
 autoapi_dirs = ['../../src']
@@ -31,8 +32,15 @@ autoapi_options = [
     'show-inheritance', 
     'show-module-summary', 
     'special-members', 
-    'imported-members'
+    'imported-members',
 ]
+
+intersphinx_mapping = {
+    "dolfinx": ("https://docs.fenicsproject.org/dolfinx/v0.10.0.post3/python/", None),
+    "ffcx": ("https://docs.fenicsproject.org/ffcx/v0.10.0", None),
+    "basix": ("https://docs.fenicsproject.org/basix/v0.10.0/", None),
+    "ufl": ("https://docs.fenicsproject.org/ufl/2025.2.0.post0", None),
+}
 
 templates_path = ['_templates']
 exclude_patterns = []

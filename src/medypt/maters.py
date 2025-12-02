@@ -1,8 +1,10 @@
+"""Classes defining example materials."""
+
 KB_E = 8.61733326e-5  
 """k_B / e in SI units"""
 
 class VO2:
-    """Class defining required callables (see :meth:`ModelBase.create_problem`) for the material VO2.
+    """Class defining required callables (see :py:meth:`~medypt.model.ModelBase.create_problem`) for the material VO2.
     """
     def __init__(self):
         v = 0.059  # nm^3

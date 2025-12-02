@@ -1,4 +1,6 @@
-from collections.abc import Callable, Iterable, Sequence
+"""Class for simulating mesoscopic dynamics of insulator-metal transitions in materials."""
+
+from collections.abc import Iterable, Sequence
 from typing import Any
 import numpy as np
 
@@ -6,14 +8,13 @@ import ufl
 from basix.ufl import element
 from dolfinx import fem, default_real_type
 # from dolfinx.common import Timer, timing # list_timings, TimingType
-from dolfinx.fem.petsc import NonlinearProblem
 
 from scifem import create_real_functionspace
 
 from mpi4py import MPI
 
-import model
-import utils
+from . import model
+from . import utils
 
 
 class IMTModel(model.ModelBase):
@@ -53,7 +54,7 @@ class IMTModel(model.ModelBase):
         of the choice of E_ref. Hence the grounded boundary condition corresponds to ``phi`` = 0 as usual.
     """
     def __init__(self):
-        """Initialize the parameters :attr:`params` and options :attr:`opts`.
+        """Initialize the parameters :py:attr:`~medypt.imt.IMTModel.params` and options :py:attr:`~medypt.model.ModelBase.opts`.
         """
         super().__init__()
         self.params = {
@@ -93,22 +94,22 @@ class IMTModel(model.ModelBase):
 
         :param phys: Sequence of strings specifying which physics components to load. Order does not matter. Possible values are:
 
-            * ``'op'``: Order parameter relaxation. Creates ``op`` field. 
-              Needs temperature, either by loading ``'T'`` or specifying a constant ``'temperature'`` in the :attr:`params` dict.
+            * ``'op'``: Order parameter relaxation. Creates ``op`` field. Needs temperature, either by loading ``'T'`` 
+              or specifying a constant ``'temperature'`` in the :py:attr:`~medypt.imt.IMTModel.params` dict.
             * ``'T'``: Heat conduction and generation. Creates ``T`` field.
             * ``'phi'``: Electrostatics. Creates ``phi`` field.
             * ``'u'``: Mechanical equilibrium. Creates ``u`` field. Needs temperature, 
-              either by loading ``'T'`` or specifying a constant ``'temperature'`` in the :attr:`params` dict.
+              either by loading ``'T'`` or specifying a constant ``'temperature'`` in the :py:attr:`~medypt.imt.IMTModel.params` dict.
             * ``'eh'``: Electron-hole transport and recombination. Creates ``ge`` and ``gh`` fields. Needs temperature, 
-              either by loading ``'T'`` or specifying a constant ``'temperature'`` in the :attr:`params` dict. 
+              either by loading ``'T'`` or specifying a constant ``'temperature'`` in the :py:attr:`~medypt.imt.IMTModel.params` dict. 
               Also need charge gap and gap center, either by loading 
-              ``'op'`` or specifying constant ``'charge_gap'`` and ``'gap_center'`` in the :attr:`params` dict.
+              ``'op'`` or specifying constant ``'charge_gap'`` and ``'gap_center'`` in the :py:attr:`~medypt.imt.IMTModel.params` dict.
             * ``'j0'``: Provide average outward current density on boundary marked by 0. Creates ``j0`` field. 
               Requires ``'eh'`` to be loaded.
 
             Coupling between different physics components will be automatically added when multiple components are loaded.
         :type phys: Sequence[str]
-        :param **kwargs: Additional keyword arguments required for loading certain physics components:
+        :param kwargs: Additional keyword arguments required for loading certain physics components:
 
             * ``op_dim`` (int): Dimension of the order parameter field. Required when loading ``'op'``.
             * ``intrinsic_f`` (Callable[[Any, Any, Any], Any]): Callable returning the intrinsic free energy density, 
@@ -122,7 +123,8 @@ class IMTModel(model.ModelBase):
             * ``gap_center`` (Callable[[Any], Any]): Callable returning the center of the gap measured from a fixed energy level 
               (reference level), with a calling signature ``gap_center(op)``. Required when loading ``'eh'`` along with ``'op'``.
 
-        :returns: None
+        :type kwargs: dict[str, Any]
+        :returns: ``None``
         """
         self.fields.clear()
         self._fields_pre.clear()
