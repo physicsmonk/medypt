@@ -148,7 +148,6 @@ class IMTModel(model.ModelBase):
         has_phi = ("phi" in phys)
         has_eh = ("eh" in phys)
         has_j0 = ("j0" in phys)
-        has_di = ("di" in phys)
         has_d = ("d" in phys)
         
         if has_T:
@@ -216,62 +215,6 @@ class IMTModel(model.ModelBase):
 
             self._exprs2save["op"] = "op"
             self._monitor["op_avg"] = fem.form(ufl.sqrt(ufl.inner(op, op)) / vol * dx)
-
-        if has_u:  # Previous-step field is needed for restoring trial solution
-            FE = element("CG", self.mesh_data.mesh.basix_cell(), 1, shape=(mesh_dim,), dtype=default_real_type)
-            FS = fem.functionspace(self.mesh_data.mesh, FE)
-            self.fields["u"] = fem.Function(FS, name="u", dtype=default_real_type)
-            self._fields_pre["u"] = fem.Function(FS, name="u_pre", dtype=default_real_type)
-            self._test_funcs["u"] = ufl.TestFunction(FS)
-
-            # Not using dict.get(key, default) because default will be evaluate regardless of whether dict has key
-            T = self.fields["T"] if has_T else kwargs["T"]
-            e0 = ufl.as_vector(kwargs["trans_strn"](op)) if has_op else ufl.zero(mesh_dim * (mesh_dim + 1) // 2)              
-
-            stiff = self.params["stiffness"]
-            if len(stiff) == 2:
-                stiff = utils.young_poisson2stiffness(*stiff, dim=mesh_dim)
-            stiff = ufl.as_matrix(stiff)
-            therm_expan = self.params["therm_expan_coeff"]
-            if isinstance(therm_expan, (int, float)):
-                therm_expan = [therm_expan] * mesh_dim + [0.0] * (mesh_dim * (mesh_dim - 1) // 2)
-            therm_expan = ufl.as_vector(therm_expan)
-            strain = utils.ufl_mat2voigt4strain(ufl.sym(ufl.grad(self.fields["u"])))
-            e_therm = therm_expan * (T - self.params["therm_expan_Tref"])
-            e_elast = strain - e_therm - e0
-            stress = stiff * e_elast # This is matrix-vector multiplication
-            s_test = utils.ufl_mat2voigt4strain(ufl.sym(ufl.grad(self._test_funcs["u"])))
-
-            self._have_dt["u"] = False
-
-            self._weak_forms["u"] = (
-                ufl.inner(stress, s_test) * dx
-            )
-
-            # Add coupling terms for previously defined physics components
-            if has_op:
-                self._weak_forms["op"] -= self._dt * ufl.inner(
-                    op_rate * ufl.dot(stress, ufl.diff(e0, op)),  # Here ufl.dot performs vector-matrix multiplication
-                    self._test_funcs["op"]
-                ) * dx
-
-            # Define von Mises stress for monitoring
-            if mesh_dim == 1:
-                stress_vM = stress[0]
-            elif mesh_dim == 2:
-                stress_vM = ufl.sqrt(stress[0] * stress[0] - stress[0] * stress[1] + stress[1] * stress[1] + 3.0 * stress[2] * stress[2])
-            else: # mesh_dim == 3
-                stress_vM = ufl.sqrt(0.5 * ( (stress[0] - stress[1]) * (stress[0] - stress[1]) 
-                                            + (stress[1] - stress[2]) * (stress[1] - stress[2]) 
-                                            + (stress[2] - stress[0]) * (stress[2] - stress[0]) ) 
-                                     + 3.0 * (stress[3] * stress[3] + stress[4] * stress[4] + stress[5] * stress[5]))
-            self._exprs2save["u"] = "u"
-            FS_scal = fem.functionspace(
-                self.mesh_data.mesh,
-                element("CG", self.mesh_data.mesh.basix_cell(), 1, dtype=default_real_type)
-            )
-            self._exprs2save["vMs"] = (stress_vM, FS_scal) 
-            self._monitor["vMs_avg"] = fem.form(stress_vM / vol * dx)
 
         if has_phi:  
             FE = element("CG", self.mesh_data.mesh.basix_cell(), 1, dtype=default_real_type)
@@ -416,34 +359,6 @@ class IMTModel(model.ModelBase):
             self._monitor["j0_avg"] = fem.form(self.fields["j0"] / area0 * ds(0))
             self._monitor["phi0_avg"] = fem.form(self.fields["phi"] / area0 * ds(0))
 
-        if has_di:
-            FE = element("CG", self.mesh_data.mesh.basix_cell(), 1, dtype=default_real_type)
-            FS = fem.functionspace(self.mesh_data.mesh, FE)
-            self.fields["gdi"] = fem.Function(FS, name="gdi", dtype=default_real_type)
-            self._fields_pre["gdi"] = fem.Function(FS, name="gdi_pre", dtype=default_real_type)
-            self._test_funcs["gdi"] = ufl.TestFunction(FS)
-
-            # Not using dict.get(key, default) because default will be evaluate regardless of whether dict has key
-            T = self.fields["T"] if has_T else kwargs["T"]
-            s = stress if has_u else ufl.zero(mesh_dim * (mesh_dim + 1) // 2)
-            phi = self.fields.get("phi", 0.0)
-
-            
-            ndi = utils.d_density(self.fields["gdi"], self.fields["gd"], self.params["d_max_density"])
-            _ndi = utils.d_density(self._fields_pre["gdi"], self._fields_pre["gd"], self.params["d_max_density"])
-            Di = self.params["d_ionized_diff_coeff"]
-            if isinstance(Di, Sequence):
-                Di = ufl.as_matrix(Di)
-            jdi = -ndi * Di / T * ufl.grad(self.fields["gdi"] * T - self.params["d_ionized_volume"] * ufl.tr(s) 
-                                           + self.params["d_charge"] * phi)
-
-            self._have_dt["gd"] = True
-            self._have_dt["gdi"] = True
-
-            self._weak_forms["gd"] = (
-
-            )
-
         if has_d:
             FE = element("CG", self.mesh_data.mesh.basix_cell(), 1, dtype=default_real_type)
             FS = fem.functionspace(self.mesh_data.mesh, FE)
@@ -451,12 +366,104 @@ class IMTModel(model.ModelBase):
             self._fields_pre["gd"] = fem.Function(FS, name="gd_pre", dtype=default_real_type)
             self._test_funcs["gd"] = ufl.TestFunction(FS)
 
+            FS_i = fem.functionspace(self.mesh_data.mesh, FE)
+            self.fields["gdi"] = fem.Function(FS_i, name="gdi", dtype=default_real_type)
+            self._fields_pre["gdi"] = fem.Function(FS_i, name="gdi_pre", dtype=default_real_type)
+            self._test_funcs["gdi"] = ufl.TestFunction(FS_i)
+
             # Not using dict.get(key, default) because default will be evaluate regardless of whether dict has key
             T = self.fields["T"] if has_T else kwargs["T"]
-            s = stress if has_u else ufl.zero(mesh_dim * (mesh_dim + 1) // 2)
+            phi = self.fields.get("phi", 0.0)
 
             nd = utils.d_density(self.fields["gd"], self.fields["gdi"], self.params["d_max_density"])
+            _nd = utils.d_density(self._fields_pre["gd"], self._fields_pre["gdi"], self.params["d_max_density"])
+            ndi = utils.d_density(self.fields["gdi"], self.fields["gd"], self.params["d_max_density"])
+            _ndi = utils.d_density(self._fields_pre["gdi"], self._fields_pre["gd"], self.params["d_max_density"])
             D = self.params["d_neutral_diff_coeff"]
             if isinstance(D, Sequence):
                 D = ufl.as_matrix(D)
-            jd = -nd * D / T * ufl.grad(self.fields["gd"] * T - self.params["d_neutral_volume"] * ufl.tr(s))
+            Di = self.params["d_ionized_diff_coeff"]
+            if isinstance(Di, Sequence):
+                Di = ufl.as_matrix(Di)
+            jd = -nd * D / T * ufl.grad(self.fields["gd"] * T)
+            jdi = -ndi * Di / T * ufl.grad(self.fields["gdi"] * T + self.params["d_charge"] * phi)
+
+            self._have_dt["gd"] = True
+            self._have_dt["gdi"] = True
+
+            self._weak_forms["gd"] = (
+                (nd - _nd) * self._test_funcs["gd"] * dx 
+                - self._dt * ufl.dot(jd, ufl.grad(self._test_funcs["gd"])) * dx
+            )
+            self._weak_forms["gdi"] = (
+                (ndi - _ndi) * self._test_funcs["gdi"] * dx 
+                - self._dt * ufl.dot(jdi, ufl.grad(self._test_funcs["gdi"])) * dx
+            )
+
+            # Add coupling terms for previously defined physics components
+            if has_eh:
+                if self.params["d_charge"] > 0:  # Defects are donors, which react primarily with free electrons
+                    Kd = n_eq ** self.params["d_charge"] * 
+                    Gd = self.params["d_ionize_rate"] * ()
+
+        if has_u:  # Previous-step field is needed for restoring trial solution
+            FE = element("CG", self.mesh_data.mesh.basix_cell(), 1, shape=(mesh_dim,), dtype=default_real_type)
+            FS = fem.functionspace(self.mesh_data.mesh, FE)
+            self.fields["u"] = fem.Function(FS, name="u", dtype=default_real_type)
+            self._fields_pre["u"] = fem.Function(FS, name="u_pre", dtype=default_real_type)
+            self._test_funcs["u"] = ufl.TestFunction(FS)
+
+            # Not using dict.get(key, default) because default will be evaluate regardless of whether dict has key
+            T = self.fields["T"] if has_T else kwargs["T"]
+            e0 = ufl.as_vector(kwargs["trans_strn"](op)) if has_op else ufl.zero(mesh_dim * (mesh_dim + 1) // 2)              
+
+            stiff = self.params["stiffness"]
+            if len(stiff) == 2:
+                stiff = utils.young_poisson2stiffness(*stiff, dim=mesh_dim)
+            stiff = ufl.as_matrix(stiff)
+            therm_expan = self.params["therm_expan_coeff"]
+            if isinstance(therm_expan, (int, float)):
+                therm_expan = [therm_expan] * mesh_dim + [0.0] * (mesh_dim * (mesh_dim - 1) // 2)
+            therm_expan = ufl.as_vector(therm_expan)
+            strain = utils.ufl_mat2voigt4strain(ufl.sym(ufl.grad(self.fields["u"])))
+            e_therm = therm_expan * (T - self.params["therm_expan_Tref"])
+            e_elast = strain - e_therm - e0
+            stress = stiff * e_elast # This is matrix-vector multiplication
+            s_test = utils.ufl_mat2voigt4strain(ufl.sym(ufl.grad(self._test_funcs["u"])))
+
+            self._have_dt["u"] = False
+
+            self._weak_forms["u"] = (
+                ufl.inner(stress, s_test) * dx
+            )
+
+            # Add coupling terms for previously defined physics components
+            if has_op:
+                self._weak_forms["op"] -= self._dt * ufl.inner(
+                    op_rate * ufl.dot(stress, ufl.diff(e0, op)),  # Here ufl.dot performs vector-matrix multiplication
+                    self._test_funcs["op"]
+                ) * dx
+
+            # Define von Mises stress for monitoring
+            if mesh_dim == 1:
+                stress_vM = stress[0]
+            elif mesh_dim == 2:
+                stress_vM = ufl.sqrt(stress[0] * stress[0] - stress[0] * stress[1] + stress[1] * stress[1] + 3.0 * stress[2] * stress[2])
+            else: # mesh_dim == 3
+                stress_vM = ufl.sqrt(0.5 * ( (stress[0] - stress[1]) * (stress[0] - stress[1]) 
+                                            + (stress[1] - stress[2]) * (stress[1] - stress[2]) 
+                                            + (stress[2] - stress[0]) * (stress[2] - stress[0]) ) 
+                                     + 3.0 * (stress[3] * stress[3] + stress[4] * stress[4] + stress[5] * stress[5]))
+            self._exprs2save["u"] = "u"
+            FS_scal = fem.functionspace(
+                self.mesh_data.mesh,
+                element("CG", self.mesh_data.mesh.basix_cell(), 1, dtype=default_real_type)
+            )
+            self._exprs2save["vMs"] = (stress_vM, FS_scal) 
+            self._monitor["vMs_avg"] = fem.form(stress_vM / vol * dx)
+
+        
+
+            
+            
+            
