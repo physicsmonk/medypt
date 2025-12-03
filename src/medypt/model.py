@@ -15,6 +15,7 @@ from basix.ufl import element
 from ufl import Measure
 from ufl.argument import Argument
 from ufl.core.expr import Expr
+from ufl.integral import Integral
 # from ufl.core.terminal import FormArgument
 from dolfinx import fem, default_real_type
 from dolfinx.io.gmsh import MeshData
@@ -69,7 +70,7 @@ class ModelBase:
     Initialized to empty dict and should be set in subclasses.
     """
     _noise: fem.Function
-    _weak_forms: dict[str, Expr] 
+    _weak_forms: dict[str, Integral] 
     """Blocked weak form. Each entry corresponds to a field equation."""
     _problem: NonlinearProblem
     _exprs2save: dict[str, str | tuple[Expr, fem.FunctionSpace]]

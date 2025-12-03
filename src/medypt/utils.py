@@ -149,6 +149,27 @@ def f1_2(x: Any, exp: Callable = ufl.exp) -> Any:
     """
     return 1.0 / (exp(-x) + 3.0 * SQRT_PI / 4.0 * (4.0 + x * x) ** (-0.75))
 
+def d_density(x1: Any, x2: Any, Nmax: float, exp: Callable = ufl.exp) -> Any:
+    """Neutral or ionized defect density function.
+    
+    :param x1: Reduced chemical potential of neutral or ionized defects.
+    :type x1: Any
+    :param x2: Reduced chemical potential of ionized or neutral defects.
+    :type x2: Any
+    :param Nmax: Maximum defect density.
+    :type Nmax: float
+    :param exp: Exponential function to use. Default to UFL exponential.
+    :type exp: Callable
+    :returns: Defect density.
+    :rtype: Any
+
+    .. note::
+
+        Pass respectively reduced chemical potentials of neutral and ionized defects to ``x1`` and ``x2``
+        to get neutral defect density, and vice versa to get ionized defect density.
+    """
+    return Nmax / (1.0 + exp(-x1) + exp(x2 - x1))
+
 def ufl_mat2voigt4strain(eps: Expr) -> Expr:
     """Convert a UFL strain matrix to Voigt notation (a UFL vector).
     

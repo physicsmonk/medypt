@@ -1,6 +1,6 @@
 """Class for simulating mesoscopic dynamics of insulator-metal transitions in materials."""
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from typing import Any
 import numpy as np
 
@@ -136,11 +136,11 @@ class IMTModel(model.ModelBase):
 
         dx = ufl.Measure("dx", domain=self.mesh_data.mesh, subdomain_data=self.mesh_data.cell_tags, 
                          metadata={"quadrature_degree": self.opts["quadr_deg"]})
-        vol = self.mesh_data.mesh.comm.allreduce(fem.assemble_scalar(fem.form(fem.Constant(self.mesh_data.mesh, default_real_type(1.0)) * dx)), op=MPI.SUM)
-        ds = ufl.Measure("ds", domain=self.mesh_data.mesh, subdomain_data=self.mesh_data.facet_tags, 
-                         metadata={"quadrature_degree": self.opts["quadr_deg"]})
-        area0 = self.mesh_data.mesh.comm.allreduce(fem.assemble_scalar(fem.form(fem.Constant(self.mesh_data.mesh, default_real_type(1.0)) * ds(0))), op=MPI.SUM)
+        vol = self.mesh_data.mesh.comm.allreduce(
+            fem.assemble_scalar(fem.form(fem.Constant(self.mesh_data.mesh, default_real_type(1.0)) * dx)), op=MPI.SUM
+        )
         self._dt = fem.Constant(self.mesh_data.mesh, default_real_type(1e-5)) # Time-step size placeholder
+        mesh_dim = self.mesh_data.mesh.geometry.dim
 
         has_T = ("T" in phys)
         has_op = ("op" in phys)
@@ -148,6 +148,8 @@ class IMTModel(model.ModelBase):
         has_phi = ("phi" in phys)
         has_eh = ("eh" in phys)
         has_j0 = ("j0" in phys)
+        has_di = ("di" in phys)
+        has_d = ("d" in phys)
         
         if has_T:
             FE = element("CG", self.mesh_data.mesh.basix_cell(), 1, dtype=default_real_type)
@@ -157,7 +159,7 @@ class IMTModel(model.ModelBase):
             self._test_funcs["T"] = ufl.TestFunction(FS)
 
             therm_cond = self.params["therm_conduct"]
-            if isinstance(therm_cond, Iterable):
+            if isinstance(therm_cond, Sequence):
                 therm_cond = ufl.as_matrix(therm_cond)
 
             self._have_dt["T"] = True
@@ -171,10 +173,10 @@ class IMTModel(model.ModelBase):
             self._monitor["T_avg"] = fem.form(self.fields["T"] / vol * dx)
 
         if has_op:
-            if "op_dim" not in kwargs:
-                raise ValueError("[IMTModel.load_physics] 'op_dim' must be specified using a keyword argument when loading 'op'.")
-            if "intrinsic_f" not in kwargs:
-                raise ValueError("[IMTModel.load_physics] 'intrinsic_f' must be specified using a keyword argument when loading 'op'.")
+            # if "op_dim" not in kwargs:
+            #     raise ValueError("[IMTModel.load_physics] 'op_dim' must be specified using a keyword argument when loading 'op'.")
+            # if "intrinsic_f" not in kwargs:
+            #     raise ValueError("[IMTModel.load_physics] 'intrinsic_f' must be specified using a keyword argument when loading 'op'.")
             
             FE = element("CG", self.mesh_data.mesh.basix_cell(), 1, shape=(kwargs["op_dim"],), dtype=default_real_type)
             FS = fem.functionspace(self.mesh_data.mesh, FE)
@@ -183,16 +185,15 @@ class IMTModel(model.ModelBase):
             self._test_funcs["op"] = ufl.TestFunction(FS)
             self._noise = fem.Function(FS, name="noise", dtype=default_real_type)
 
-            # Temperature needed; Constant specified through params attribute if not loading the physics
             # Not using dict.get(key, default) because default will be evaluate regardless of whether dict has key
-            T = self.fields["T"] if has_T else self.params["temperature"]
+            T = self.fields["T"] if has_T else kwargs["T"]
 
             op = ufl.variable(self.fields["op"])
             dop = ufl.variable(ufl.grad(self.fields["op"]))
             f_in = kwargs["intrinsic_f"](T, op, dop)
 
             op_rate = self.params["op_relax_rate"]
-            if isinstance(op_rate, Iterable):
+            if isinstance(op_rate, Sequence):
                 op_rate = ufl.as_matrix(op_rate)
 
             self._have_dt["op"] = True
@@ -203,7 +204,7 @@ class IMTModel(model.ModelBase):
                 + self._dt * ufl.inner(ufl.diff(f_in, dop), ufl.grad(self._test_funcs["op"])) * dx
             )
 
-            # Add coupling terms
+            # Add coupling terms for previously defined physics components
             if has_T:
                 # Approximate internal energy relative to that of high-temperature disordered phase
                 delU = kwargs["intrinsic_f"](0.0, op, ufl.zero(*dop.ufl_shape))
@@ -217,16 +218,15 @@ class IMTModel(model.ModelBase):
             self._monitor["op_avg"] = fem.form(ufl.sqrt(ufl.inner(op, op)) / vol * dx)
 
         if has_u:  # Previous-step field is needed for restoring trial solution
-            mesh_dim = self.mesh_data.mesh.geometry.dim
             FE = element("CG", self.mesh_data.mesh.basix_cell(), 1, shape=(mesh_dim,), dtype=default_real_type)
             FS = fem.functionspace(self.mesh_data.mesh, FE)
             self.fields["u"] = fem.Function(FS, name="u", dtype=default_real_type)
             self._fields_pre["u"] = fem.Function(FS, name="u_pre", dtype=default_real_type)
             self._test_funcs["u"] = ufl.TestFunction(FS)
 
-            # Temperature needed; Constant specified through params attribute if not loading the physics
             # Not using dict.get(key, default) because default will be evaluate regardless of whether dict has key
-            T = self.fields["T"] if has_T else self.params["temperature"]
+            T = self.fields["T"] if has_T else kwargs["T"]
+            e0 = ufl.as_vector(kwargs["trans_strn"](op)) if has_op else ufl.zero(mesh_dim * (mesh_dim + 1) // 2)              
 
             stiff = self.params["stiffness"]
             if len(stiff) == 2:
@@ -238,7 +238,7 @@ class IMTModel(model.ModelBase):
             therm_expan = ufl.as_vector(therm_expan)
             strain = utils.ufl_mat2voigt4strain(ufl.sym(ufl.grad(self.fields["u"])))
             e_therm = therm_expan * (T - self.params["therm_expan_Tref"])
-            e_elast = strain - e_therm
+            e_elast = strain - e_therm - e0
             stress = stiff * e_elast # This is matrix-vector multiplication
             s_test = utils.ufl_mat2voigt4strain(ufl.sym(ufl.grad(self._test_funcs["u"])))
 
@@ -248,30 +248,23 @@ class IMTModel(model.ModelBase):
                 ufl.inner(stress, s_test) * dx
             )
 
-            # Add coupling terms
-            s = stress
+            # Add coupling terms for previously defined physics components
             if has_op:
-                if "trans_strn" not in kwargs:
-                    raise ValueError("[IMTModel.load_physics] 'trans_strn' must be specified using a keyword argument when loading 'u' along with 'op'.")
-                
-                e0 = ufl.as_vector(kwargs["trans_strn"](op))
-                s0 = stiff * e0 
-                s = stress - s0
-                dfela_dop = -ufl.dot(s, ufl.diff(e0, op))
-
-                self._weak_forms["u"] -= ufl.inner(s0, s_test) * dx
-                self._weak_forms["op"] += ufl.inner(self._dt * op_rate * dfela_dop, self._test_funcs["op"]) * dx
+                self._weak_forms["op"] -= self._dt * ufl.inner(
+                    op_rate * ufl.dot(stress, ufl.diff(e0, op)),  # Here ufl.dot performs vector-matrix multiplication
+                    self._test_funcs["op"]
+                ) * dx
 
             # Define von Mises stress for monitoring
             if mesh_dim == 1:
-                stress_vM = s[0]
+                stress_vM = stress[0]
             elif mesh_dim == 2:
-                stress_vM = ufl.sqrt(s[0] * s[0] - s[0] * s[1] + s[1] * s[1] + 3.0 * s[2] * s[2])
+                stress_vM = ufl.sqrt(stress[0] * stress[0] - stress[0] * stress[1] + stress[1] * stress[1] + 3.0 * stress[2] * stress[2])
             else: # mesh_dim == 3
-                stress_vM = ufl.sqrt(0.5 * ( (s[0] - s[1]) * (s[0] - s[1]) 
-                                            + (s[1] - s[2]) * (s[1] - s[2]) 
-                                            + (s[2] - s[0]) * (s[2] - s[0]) ) 
-                                     + 3.0 * (s[3] * s[3] + s[4] * s[4] + s[5] * s[5]))
+                stress_vM = ufl.sqrt(0.5 * ( (stress[0] - stress[1]) * (stress[0] - stress[1]) 
+                                            + (stress[1] - stress[2]) * (stress[1] - stress[2]) 
+                                            + (stress[2] - stress[0]) * (stress[2] - stress[0]) ) 
+                                     + 3.0 * (stress[3] * stress[3] + stress[4] * stress[4] + stress[5] * stress[5]))
             self._exprs2save["u"] = "u"
             FS_scal = fem.functionspace(
                 self.mesh_data.mesh,
@@ -288,7 +281,7 @@ class IMTModel(model.ModelBase):
             self._test_funcs["phi"] = ufl.TestFunction(FS)
 
             perm = self.params["back_diel_const"]
-            if isinstance(perm, Iterable):
+            if isinstance(perm, Sequence):
                 perm = ufl.as_matrix(perm)
             perm = perm * 0.05526349406 # e V^-1 nm^-1
 
@@ -299,13 +292,12 @@ class IMTModel(model.ModelBase):
             )
 
             self._exprs2save["phi"] = "phi"
-            self._monitor["phi0_avg"] = fem.form(self.fields["phi"] / area0 * ds(0))
         
         if has_eh:
-            if "charge_gap" not in kwargs:
-                raise ValueError("[IMTModel.load_physics] 'charge_gap' must be specified using a keyword argument when loading `eh`.")
-            if "gap_center" not in kwargs:
-                raise ValueError("[IMTModel.load_physics] 'gap_center' must be specified using a keyword argument when loading `eh`.")
+            # if "charge_gap" not in kwargs:
+            #     raise ValueError("[IMTModel.load_physics] 'charge_gap' must be specified using a keyword argument when loading `eh`.")
+            # if "gap_center" not in kwargs:
+            #     raise ValueError("[IMTModel.load_physics] 'gap_center' must be specified using a keyword argument when loading `eh`.")
             
             FE = element("CG", self.mesh_data.mesh.basix_cell(), 1, dtype=default_real_type)
             FS_e = fem.functionspace(self.mesh_data.mesh, FE)
@@ -318,15 +310,14 @@ class IMTModel(model.ModelBase):
             self._fields_pre["gh"] = fem.Function(FS_h, name="gh_pre", dtype=default_real_type)
             self._test_funcs["gh"] = ufl.TestFunction(FS_h)
             
-            # Temperature and gap needed; Constant specified through params attribute if not loading the physics
             # Not using dict.get(key, default) because default will be evaluate regardless of whether dict has key
-            T = self.fields["T"] if has_T else self.params["temperature"]
+            T = self.fields["T"] if has_T else kwargs["T"]
             if has_op:
                 Eg = kwargs["charge_gap"](op)
                 E0 = kwargs["gap_center"](op)
             else:
-                Eg = self.params["charge_gap"]
-                E0 = self.params["gap_center"]
+                Eg = kwargs["charge_gap"]
+                E0 = kwargs["gap_center"]
             phi = self.fields.get("phi", 0.0)
 
             m_h2 = 0.332420142 # m / h^2 in unit of eV^-1 nm^-2
@@ -354,10 +345,10 @@ class IMTModel(model.ModelBase):
             n_eq = Nc * utils.f1_2((mu_neutr - Ee + phi) / T)
             p_eq = Nv * utils.f1_2((-mu_neutr - Eh - phi) / T)
             mob_e = self.params["e_mobility"]
-            if isinstance(mob_e, Iterable):
+            if isinstance(mob_e, Sequence):
                 mob_e = ufl.as_matrix(mob_e)
             mob_h = self.params["h_mobility"]
-            if isinstance(mob_h, Iterable):
+            if isinstance(mob_h, Sequence):
                 mob_h = ufl.as_matrix(mob_h)
             je = -n * mob_e * ufl.grad(self.fields["ge"] * T + Ee - phi)
             jh = -p * mob_h * ufl.grad(self.fields["gh"] * T + Eh + phi)
@@ -375,7 +366,7 @@ class IMTModel(model.ModelBase):
                 - self._dt * ufl.inner(jh, ufl.grad(self._test_funcs["gh"])) * dx
             )
 
-            # Add coupling terms
+            # Add coupling terms for previously defined physics components
             if has_phi:
                 self._weak_forms["phi"] -= (
                     (p - n) * self._test_funcs["phi"] * dx
@@ -400,6 +391,12 @@ class IMTModel(model.ModelBase):
             if not has_eh:
                 raise ValueError("[IMTModel.load_physics] 'eh' must be loaded for loading 'j0'.")
             
+            ds = ufl.Measure("ds", domain=self.mesh_data.mesh, subdomain_data=self.mesh_data.facet_tags, 
+                             metadata={"quadrature_degree": self.opts["quadr_deg"]})
+            area0 = self.mesh_data.mesh.comm.allreduce(
+                fem.assemble_scalar(fem.form(fem.Constant(self.mesh_data.mesh, default_real_type(1.0)) * ds(0))), op=MPI.SUM
+            )
+            
             # Create real function space, which contains only one real number uniform across the mesh.
             # It must be handled separately from the mixed function space.
             # See https://github.com/scientificcomputing/scifem/blob/main/examples/real_function_space.py
@@ -417,6 +414,49 @@ class IMTModel(model.ModelBase):
             )
 
             self._monitor["j0_avg"] = fem.form(self.fields["j0"] / area0 * ds(0))
+            self._monitor["phi0_avg"] = fem.form(self.fields["phi"] / area0 * ds(0))
 
+        if has_di:
+            FE = element("CG", self.mesh_data.mesh.basix_cell(), 1, dtype=default_real_type)
+            FS = fem.functionspace(self.mesh_data.mesh, FE)
+            self.fields["gdi"] = fem.Function(FS, name="gdi", dtype=default_real_type)
+            self._fields_pre["gdi"] = fem.Function(FS, name="gdi_pre", dtype=default_real_type)
+            self._test_funcs["gdi"] = ufl.TestFunction(FS)
 
+            # Not using dict.get(key, default) because default will be evaluate regardless of whether dict has key
+            T = self.fields["T"] if has_T else kwargs["T"]
+            s = stress if has_u else ufl.zero(mesh_dim * (mesh_dim + 1) // 2)
+            phi = self.fields.get("phi", 0.0)
 
+            
+            ndi = utils.d_density(self.fields["gdi"], self.fields["gd"], self.params["d_max_density"])
+            _ndi = utils.d_density(self._fields_pre["gdi"], self._fields_pre["gd"], self.params["d_max_density"])
+            Di = self.params["d_ionized_diff_coeff"]
+            if isinstance(Di, Sequence):
+                Di = ufl.as_matrix(Di)
+            jdi = -ndi * Di / T * ufl.grad(self.fields["gdi"] * T - self.params["d_ionized_volume"] * ufl.tr(s) 
+                                           + self.params["d_charge"] * phi)
+
+            self._have_dt["gd"] = True
+            self._have_dt["gdi"] = True
+
+            self._weak_forms["gd"] = (
+
+            )
+
+        if has_d:
+            FE = element("CG", self.mesh_data.mesh.basix_cell(), 1, dtype=default_real_type)
+            FS = fem.functionspace(self.mesh_data.mesh, FE)
+            self.fields["gd"] = fem.Function(FS, name="gd", dtype=default_real_type)
+            self._fields_pre["gd"] = fem.Function(FS, name="gd_pre", dtype=default_real_type)
+            self._test_funcs["gd"] = ufl.TestFunction(FS)
+
+            # Not using dict.get(key, default) because default will be evaluate regardless of whether dict has key
+            T = self.fields["T"] if has_T else kwargs["T"]
+            s = stress if has_u else ufl.zero(mesh_dim * (mesh_dim + 1) // 2)
+
+            nd = utils.d_density(self.fields["gd"], self.fields["gdi"], self.params["d_max_density"])
+            D = self.params["d_neutral_diff_coeff"]
+            if isinstance(D, Sequence):
+                D = ufl.as_matrix(D)
+            jd = -nd * D / T * ufl.grad(self.fields["gd"] * T - self.params["d_neutral_volume"] * ufl.tr(s))
