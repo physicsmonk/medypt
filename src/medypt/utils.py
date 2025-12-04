@@ -231,6 +231,23 @@ def young_poisson2stiffness(E: float, nu: float, dim: int) -> list[list[float]]:
         ]
     else:
         raise ValueError("[young_poisson2stiffness] Dimension must be 1, 2, or 3.")
+    
+def ufl_tr_voigt(a: Expr) -> Expr:
+    """Calculate the trace of a UFL matrix in Voigt notation.
+    
+    :param a: Input matrix in Voigt notation (a vector).
+    :type a: Expr
+    :returns: Trace of the input matrix.
+    :rtype: Expr
+    """
+    if a.ufl_shape == (1,):
+        return a[0]
+    elif a.ufl_shape == (3,):
+        return a[0] + a[1]
+    elif a.ufl_shape == (6,):
+        return a[0] + a[1] + a[2]
+    else:
+        raise ValueError("[tr_voigt] Input matrix in Voigt notation must be of shape (1,), (3,), or (6,).")
 
 def relativeL2error(
         u1: fem.Function | Sequence[fem.Function] | dict[str, fem.Function], 

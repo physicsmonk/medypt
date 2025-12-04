@@ -15,6 +15,7 @@ from mpi4py import MPI
 
 from . import model
 from . import utils
+from .maters import M_H2
 
 
 class IMTModel(model.ModelBase):
@@ -69,7 +70,15 @@ class IMTModel(model.ModelBase):
             "eh_recomb_rate": 0.1, # nm^3 / ns
             "back_diel_const": 10.0, # Scalar: isotropic; 2D array-like: full tensor
             "vol_heat_cap": 217.0, # nm^-3
-            "therm_conduct": 4.3e5 # nm^-1 ns^-1. Scalar: isotropic; 2D array-like: full tensor
+            "therm_conduct": 4.3e5, # nm^-1 ns^-1. Scalar: isotropic; 2D array-like: full tensor
+            "d_max_density": 10.0, # nm^-3
+            "d_neutral_diff_coeff": 1e-8, # nm^2 / ns. Scalar: isotropic; 2D array-like: full tensor
+            "d_ionized_diff_coeff": 1e-8, # nm^2 / ns. Scalar: isotropic; 2D array-like: full tensor
+            "d_valence": 1,
+            "d_elec_level": 0.2, # eV
+            "d_neutral_volume": 0.01, # nm^3
+            "d_ionized_volume": 0.02, # nm^3
+            "d_ionize_rate": 0.1,
         } # Physical parameter dictionary
         """A dictonary defining physical parameters. Contents include:
 
@@ -263,14 +272,13 @@ class IMTModel(model.ModelBase):
                 E0 = kwargs["gap_center"]
             phi = self.fields.get("phi", 0.0)
 
-            m_h2 = 0.332420142 # m / h^2 in unit of eV^-1 nm^-2
-            Nc = 2.0 * (2.0 * np.pi * m_h2 * self.params["e_eff_mass"] * T) ** 1.5
-            Nv = 2.0 * (2.0 * np.pi * m_h2 * self.params["h_eff_mass"] * T) ** 1.5
+            Nc = 2.0 * (2.0 * np.pi * M_H2 * self.params["e_eff_mass"] * T) ** 1.5
+            Nv = 2.0 * (2.0 * np.pi * M_H2 * self.params["h_eff_mass"] * T) ** 1.5
             n = Nc * utils.f1_2(self.fields["ge"])
             p = Nv * utils.f1_2(self.fields["gh"])
             if has_T:
-                _n = 2.0 * (2.0 * np.pi * m_h2 * self.params["e_eff_mass"] * self._fields_pre["T"]) ** 1.5 * utils.f1_2(self._fields_pre["ge"])
-                _p = 2.0 * (2.0 * np.pi * m_h2 * self.params["h_eff_mass"] * self._fields_pre["T"]) ** 1.5 * utils.f1_2(self._fields_pre["gh"])
+                _n = 2.0 * (2.0 * np.pi * M_H2 * self.params["e_eff_mass"] * self._fields_pre["T"]) ** 1.5 * utils.f1_2(self._fields_pre["ge"])
+                _p = 2.0 * (2.0 * np.pi * M_H2 * self.params["h_eff_mass"] * self._fields_pre["T"]) ** 1.5 * utils.f1_2(self._fields_pre["gh"])
             else:
                 _n = Nc * utils.f1_2(self._fields_pre["ge"])
                 _p = Nv * utils.f1_2(self._fields_pre["gh"])
@@ -325,6 +333,8 @@ class IMTModel(model.ModelBase):
 
             self._exprs2save["n"] = (n, self.fields["ge"].function_space)
             self._exprs2save["p"] = (p, self.fields["gh"].function_space)
+            self._monitor["n_avg"] = fem.form(n / vol * dx)
+            self._monitor["p_avg"] = fem.form(p / vol * dx)
 
         if has_j0:
             if not has_eh:
@@ -398,8 +408,8 @@ class IMTModel(model.ModelBase):
 
             # Add coupling terms
             if has_eh:
-                # Works for both donors and acceptors; Another reaction with the opposite carriers is neglegibly slow
-                # Also defined in terms of fugacities of electrons and holes (for defects still using density)
+                # Works for both donors and acceptors; Another reaction with the opposite carriers is neglegibly slow.
+                # Also defined in terms of fugacities of electrons and holes (using densities for defects is still allowed).
                 Kd = Nc ** abs(self.params["d_valence"]) * ufl.exp((self.params["d_valence"] * self.params["d_elec_level"] 
                                                                     - abs(self.params["d_valence"]) * Ee) / T)
                 if self.params["d_valence"] > 0:  # Defects are donors, which react primarily with free electrons
@@ -412,6 +422,11 @@ class IMTModel(model.ModelBase):
                     self._weak_forms["gh"] -= self._dt * Rd * self._test_funcs["gh"] * dx
                 self._weak_forms["gd"] += self._dt * Rd * self._test_funcs["gd"] * dx
                 self._weak_forms["gdi"] -= self._dt * Rd * self._test_funcs["gdi"] * dx
+
+            self._exprs2save["nd"] = (nd, self.fields["gd"].function_space)
+            self._exprs2save["ndi"] = (ndi, self.fields["gdi"].function_space)
+            self._monitor["nd_avg"] = fem.form(nd / vol * dx)
+            self._monitor["ndi_avg"] = fem.form(ndi / vol * dx)
 
         if has_u:  # Previous-step field is needed for restoring trial solution
             FE = element("CG", self.mesh_data.mesh.basix_cell(), 1, shape=(mesh_dim,), dtype=default_real_type)
@@ -456,9 +471,9 @@ class IMTModel(model.ModelBase):
                     self._test_funcs["op"]
                 ) * dx
             if has_d:
-                self._weak_forms["gd"] -= self._dt * ufl.dot(nd * D / T * ufl.grad(self.params["d_neutral_volume"] * ufl.tr(stress)),
+                self._weak_forms["gd"] -= self._dt * ufl.dot(nd * D / T * ufl.grad(self.params["d_neutral_volume"] * utils.ufl_tr_voigt(stress)),
                                                              ufl.grad(self._test_funcs["gd"])) * dx
-                self._weak_forms["gdi"] -= self._dt * ufl.dot(ndi * Di / T * ufl.grad(self.params["d_ionized_volume"] * ufl.tr(stress)),
+                self._weak_forms["gdi"] -= self._dt * ufl.dot(ndi * Di / T * ufl.grad(self.params["d_ionized_volume"] * utils.ufl_tr_voigt(stress)),
                                                               ufl.grad(self._test_funcs["gdi"])) * dx
 
             # Define von Mises stress for monitoring

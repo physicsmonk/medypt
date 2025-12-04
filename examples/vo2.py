@@ -7,7 +7,8 @@ from dolfinx import default_real_type
 from dolfinx.fem import Function, Constant
 
 from medypt.imt import IMTModel
-from medypt.maters import KB_E, VO2
+from medypt.maters import KB_E, M_H2, VO2
+from medypt.utils import f1_2
 
 
 p_rank = MPI.COMM_WORLD.Get_rank()
@@ -15,8 +16,8 @@ p_rank = MPI.COMM_WORLD.Get_rank()
 #--------- Create the insulator-metal transition (IMT) model ---------
 model = IMTModel()
 
-# String indicating mesh file name or None if generating mesh within this script using gmsh
-msh = None
+# String indicating mesh file name or None for generating mesh within this script using gmsh
+msh = "mesh.msh"
 
 #--------- Specify geometry and mesh parameters ---------
 has_bl = False  # whether to include boundary layers when generating mesh
@@ -52,18 +53,15 @@ model.opts["min_dt"] = 1e-12
 model.opts["rand_seed"] = 321245
 model.opts["verbose"] = True
 model.opts["save_period"] = 10
-model.opts["has_thermal_noise"] = True
+model.opts["has_thermal_noise"] = False
 model.opts["t_step_rtol"] = 0.01
 
 T_i = 300.0 * KB_E
-mu_e_i = 0.0
-mu_h_i = 0.0
+mu_e_i = 0.1
 op_i = np.array([-0.5, 0.0, -0.5, 0.0, 0.5, 0.0, 0.5, 0.0]) 
 phi_i = 0.0
 tspan = 0.001
 dt = 1e-5
-
-model.params["temperature"] = T_i
 
 
 l_bc = l_bl1 if has_bl else lc
@@ -183,11 +181,13 @@ model.load_physics(
         "op", 
        # "T", 
         "u", 
-       # "eh", 
+        "eh", 
        # "phi",
-       # "j0"
+       # "j0",
+        "d"
     ], 
     op_dim=8, 
+    T = T_i,
     intrinsic_f=vo2.intrinsic_f, 
     charge_gap=vo2.charge_gap,
     trans_strn=vo2.trans_strn, 
@@ -228,7 +228,15 @@ def T0(x):
 def ge0(x):
     return np.full(x.shape[1], (mu_e_i - vo2.charge_gap(op_i) / 2.0) / T_i)
 def gh0(x):
-    return np.full(x.shape[1], (mu_h_i - vo2.charge_gap(op_i) / 2.0) / T_i)
+    return np.full(x.shape[1], (-mu_e_i - vo2.charge_gap(op_i) / 2.0) / T_i)
+Nc_i = 2.0 * (2.0 * np.pi * M_H2 * model.params["e_eff_mass"] * T_i) ** 1.5
+Nv_i = 2.0 * (2.0 * np.pi * M_H2 * model.params["h_eff_mass"] * T_i) ** 1.5
+def gdi0(x):
+    return np.log(model.params["d_max_density"] * model.params["d_valence"]
+                  / (Nc_i * f1_2(ge0(x), exp=np.exp) - Nv_i * f1_2(gh0(x), exp=np.exp))
+                  - np.exp(model.params["d_valence"] * (mu_e_i - model.params["d_elec_level"]) / T_i) - 1.0)
+def gd0(x):
+    return gdi0(x) - model.params["d_valence"] * (mu_e_i - model.params["d_elec_level"]) / T_i
 def phi0(x):
     return np.full(x.shape[1], phi_i)
 
@@ -238,7 +246,9 @@ ics = { # Uncomment the initial conditions you want to apply
    # "phi": phi0,
    # "T": T0,
    # "ge": ge0,
-   # "gh": gh0
+   # "gh": gh0,
+    "gd": gd0,
+    "gdi": gdi0
 }
 
 model.solve(tspan, dt, ics)

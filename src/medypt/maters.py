@@ -3,6 +3,9 @@
 KB_E = 8.61733326e-5  
 """k_B / e in SI units"""
 
+M_H2 = 0.332420142 
+"""m / h^2 in unit of eV^-1 nm^-2"""
+
 class VO2:
     """Class defining required callables (see :py:meth:`~medypt.model.ModelBase.create_problem`) for the material VO2.
     """
