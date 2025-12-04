@@ -264,15 +264,13 @@ class IMTModel(model.ModelBase):
             phi = self.fields.get("phi", 0.0)
 
             m_h2 = 0.332420142 # m / h^2 in unit of eV^-1 nm^-2
-            me = self.params["e_eff_mass"]
-            mh = self.params["h_eff_mass"]
-            Nc = 2.0 * (2.0 * np.pi * m_h2 * me * T) ** 1.5
-            Nv = 2.0 * (2.0 * np.pi * m_h2 * mh * T) ** 1.5
+            Nc = 2.0 * (2.0 * np.pi * m_h2 * self.params["e_eff_mass"] * T) ** 1.5
+            Nv = 2.0 * (2.0 * np.pi * m_h2 * self.params["h_eff_mass"] * T) ** 1.5
             n = Nc * utils.f1_2(self.fields["ge"])
             p = Nv * utils.f1_2(self.fields["gh"])
             if has_T:
-                _n = 2.0 * (2.0 * np.pi * m_h2 * me * self._fields_pre["T"]) ** 1.5 * utils.f1_2(self._fields_pre["ge"])
-                _p = 2.0 * (2.0 * np.pi * m_h2 * mh * self._fields_pre["T"]) ** 1.5 * utils.f1_2(self._fields_pre["gh"])
+                _n = 2.0 * (2.0 * np.pi * m_h2 * self.params["e_eff_mass"] * self._fields_pre["T"]) ** 1.5 * utils.f1_2(self._fields_pre["ge"])
+                _p = 2.0 * (2.0 * np.pi * m_h2 * self.params["h_eff_mass"] * self._fields_pre["T"]) ** 1.5 * utils.f1_2(self._fields_pre["gh"])
             else:
                 _n = Nc * utils.f1_2(self._fields_pre["ge"])
                 _p = Nv * utils.f1_2(self._fields_pre["gh"])
@@ -280,13 +278,10 @@ class IMTModel(model.ModelBase):
             Eh = Eg / 2.0 - E0
             # This is intrinsic chemical potential valid only for a large energy gap compared to T 
             # (but valid for all values of gap if mh = me).
-            # TODO: Find a better approximation for the charge-neutral chemical potential for all values
+            # TODO: Find a better approximation for the intrinsic chemical potential for all values
             # of the energy gap.
-            mu_neutr = E0 + 3.0 / 4.0 * T * np.log(mh / me)
-            n_in = Nc * utils.f1_2((mu_neutr - Ee) / T)
-            # Local equilibrium electron and hole densities for given order parameter, potential, and temperature
-            n_eq = Nc * utils.f1_2((mu_neutr - Ee + phi) / T)
-            p_eq = Nv * utils.f1_2((-mu_neutr - Eh - phi) / T)
+            mu_in = E0 + 3.0 / 4.0 * T * np.log(self.params["h_eff_mass"] / self.params["e_eff_mass"])
+            n_in = Nc * utils.f1_2((mu_in - Ee) / T)
             mob_e = self.params["e_mobility"]
             if isinstance(mob_e, Sequence):
                 mob_e = ufl.as_matrix(mob_e)
@@ -295,17 +290,18 @@ class IMTModel(model.ModelBase):
                 mob_h = ufl.as_matrix(mob_h)
             je = -n * mob_e * ufl.grad(self.fields["ge"] * T + Ee - phi)
             jh = -p * mob_h * ufl.grad(self.fields["gh"] * T + Eh + phi)
-            gen_rad = self.params["eh_recomb_rate"] * (n_eq * p_eq - n * p)
+            # Recombination-generation term, which must be defined in terms of fugacity, not real densities
+            Reh = self.params["eh_recomb_rate"] * Nc * Nv * (ufl.exp(-Eg / T) - ufl.exp(self.fields["ge"] + self.fields["gh"]))
 
             self._have_dt["ge"] = True
             self._have_dt["gh"] = True
 
             self._weak_forms["ge"] = (
-                (n - _n - self._dt * gen_rad) * self._test_funcs["ge"] * dx 
+                (n - _n - self._dt * Reh) * self._test_funcs["ge"] * dx 
                 - self._dt * ufl.inner(je, ufl.grad(self._test_funcs["ge"])) * dx
             )
             self._weak_forms["gh"] = (
-                (p - _p - self._dt * gen_rad) * self._test_funcs["gh"] * dx 
+                (p - _p - self._dt * Reh) * self._test_funcs["gh"] * dx 
                 - self._dt * ufl.inner(jh, ufl.grad(self._test_funcs["gh"])) * dx
             )
 
@@ -386,7 +382,7 @@ class IMTModel(model.ModelBase):
             if isinstance(Di, Sequence):
                 Di = ufl.as_matrix(Di)
             jd = -nd * D / T * ufl.grad(self.fields["gd"] * T)
-            jdi = -ndi * Di / T * ufl.grad(self.fields["gdi"] * T + self.params["d_charge"] * phi)
+            jdi = -ndi * Di / T * ufl.grad(self.fields["gdi"] * T + self.params["d_valence"] * phi)
 
             self._have_dt["gd"] = True
             self._have_dt["gdi"] = True
@@ -400,11 +396,22 @@ class IMTModel(model.ModelBase):
                 - self._dt * ufl.dot(jdi, ufl.grad(self._test_funcs["gdi"])) * dx
             )
 
-            # Add coupling terms for previously defined physics components
+            # Add coupling terms
             if has_eh:
-                if self.params["d_charge"] > 0:  # Defects are donors, which react primarily with free electrons
-                    Kd = n_eq ** self.params["d_charge"] * 
-                    Gd = self.params["d_ionize_rate"] * ()
+                # Works for both donors and acceptors; Another reaction with the opposite carriers is neglegibly slow
+                # Also defined in terms of fugacities of electrons and holes (for defects still using density)
+                Kd = Nc ** abs(self.params["d_valence"]) * ufl.exp((self.params["d_valence"] * self.params["d_elec_level"] 
+                                                                    - abs(self.params["d_valence"]) * Ee) / T)
+                if self.params["d_valence"] > 0:  # Defects are donors, which react primarily with free electrons
+                    Rd = self.params["d_ionize_rate"] * (Kd * nd - ndi * Nc ** self.params["d_valence"] 
+                                                         * ufl.exp(self.params["d_valence"] * self.fields["ge"]))
+                    self._weak_forms["ge"] -= self._dt * Rd * self._test_funcs["ge"] * dx
+                else:  # Defects are acceptors, which react primarily with free holes
+                    Rd = self.params["d_ionize_rate"] * (Kd * nd - ndi * Nv ** (-self.params["d_valence"])
+                                                         * ufl.exp(-self.params["d_valence"] * self.fields["gh"]))
+                    self._weak_forms["gh"] -= self._dt * Rd * self._test_funcs["gh"] * dx
+                self._weak_forms["gd"] += self._dt * Rd * self._test_funcs["gd"] * dx
+                self._weak_forms["gdi"] -= self._dt * Rd * self._test_funcs["gdi"] * dx
 
         if has_u:  # Previous-step field is needed for restoring trial solution
             FE = element("CG", self.mesh_data.mesh.basix_cell(), 1, shape=(mesh_dim,), dtype=default_real_type)
@@ -415,7 +422,12 @@ class IMTModel(model.ModelBase):
 
             # Not using dict.get(key, default) because default will be evaluate regardless of whether dict has key
             T = self.fields["T"] if has_T else kwargs["T"]
-            e0 = ufl.as_vector(kwargs["trans_strn"](op)) if has_op else ufl.zero(mesh_dim * (mesh_dim + 1) // 2)              
+            e0 = ufl.as_vector(kwargs["trans_strn"](op)) if has_op else ufl.zero(mesh_dim * (mesh_dim + 1) // 2)
+            ed = (
+                (self.params["d_neutral_volume"] * nd + self.params["d_ionized_volume"] * ndi)
+                * ufl.as_vector([1.0] * mesh_dim + [0.0] * (mesh_dim * (mesh_dim - 1) // 2))
+                if has_d else ufl.zero(mesh_dim * (mesh_dim + 1) // 2)
+            )
 
             stiff = self.params["stiffness"]
             if len(stiff) == 2:
@@ -427,7 +439,7 @@ class IMTModel(model.ModelBase):
             therm_expan = ufl.as_vector(therm_expan)
             strain = utils.ufl_mat2voigt4strain(ufl.sym(ufl.grad(self.fields["u"])))
             e_therm = therm_expan * (T - self.params["therm_expan_Tref"])
-            e_elast = strain - e_therm - e0
+            e_elast = strain - e_therm - e0 - ed
             stress = stiff * e_elast # This is matrix-vector multiplication
             s_test = utils.ufl_mat2voigt4strain(ufl.sym(ufl.grad(self._test_funcs["u"])))
 
@@ -443,6 +455,11 @@ class IMTModel(model.ModelBase):
                     op_rate * ufl.dot(stress, ufl.diff(e0, op)),  # Here ufl.dot performs vector-matrix multiplication
                     self._test_funcs["op"]
                 ) * dx
+            if has_d:
+                self._weak_forms["gd"] -= self._dt * ufl.dot(nd * D / T * ufl.grad(self.params["d_neutral_volume"] * ufl.tr(stress)),
+                                                             ufl.grad(self._test_funcs["gd"])) * dx
+                self._weak_forms["gdi"] -= self._dt * ufl.dot(ndi * Di / T * ufl.grad(self.params["d_ionized_volume"] * ufl.tr(stress)),
+                                                              ufl.grad(self._test_funcs["gdi"])) * dx
 
             # Define von Mises stress for monitoring
             if mesh_dim == 1:
