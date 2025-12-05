@@ -8,7 +8,7 @@ MEDYPT documentation
 
 MEDYPT is a Python library for simulating **ME**\ soscopic **DY**\ namics of
 **P**\ hase **T**\ ransitions in materials.
-It uses finite element method implemented in `FEniCSx <https://fenicsproject.org/>`_ to solve coupled field equations.
+It uses finite element method implemented in `FEniCSx <https://fenicsproject.org/>`_ package to solve coupled field equations.
 Typical workflow is:
 
 #. Create mesh by users
@@ -25,14 +25,17 @@ Plan to implement more phase-field models such as that of ferroelectrics in the 
 Installation
 ------------
 
-MEDYPT is a pure Python package and is currently on `TestPyPI <https://test.pypi.org/project/medypt/>`_.
-You can install it using pip:
+MEDYPT itself is a pure Python package and is currently on `TestPyPI <https://test.pypi.org/project/medypt/>`_.
+You can install it easily for any platform using pip:
 
 .. code-block:: bash
 
    pip install --index-url https://test.pypi.org/simple/ --no-deps medypt
 
-But remember to install petsc4py, FEniCSx, and scifem first.
+But remember to install `petsc4py <https://petsc.org/release/petsc4py/>`_, `DOLFINx <https://docs.fenicsproject.org/dolfinx/v0.10.0.post3/python/installation.html>`_ 
+(need Python interface, and need to be configured with `PETSc <https://petsc.org/release/install/>`_ and `ADIOS2 <https://github.com/ornladios/ADIOS2/>`_), 
+`scifem <https://github.com/scientificcomputing/scifem>`_, and `Gmsh <https://gmsh.info/#Documentation>`_ (need Python interface) first.
+Follow the instructions on their respective websites for installation.
 
 .. toctree::
    :maxdepth: 2

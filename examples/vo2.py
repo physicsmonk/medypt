@@ -66,7 +66,7 @@ dt = 1e-5
 
 l_bc = l_bl1 if has_bl else lc
 
-#--------- Generate or load mesh ---------
+#--------- Generate mesh using gmsh if msh is None ---------
 if msh is None:
     gmsh.initialize()
     msh = gmsh.model()
@@ -179,10 +179,10 @@ vo2 = VO2()
 model.load_physics(
     [ # Uncomment the physics components you want to include
         "op", 
-       # "T", 
+        "T", 
         "u", 
         "eh", 
-       # "phi",
+        "phi",
        # "j0",
         "d"
     ], 
@@ -200,20 +200,20 @@ u_bott.interpolate(lambda x: np.vstack((substr_strain[0] * x[0] + substr_strain[
                                         substr_strain[2] * x[0] + substr_strain[1] * x[1],
                                         0.0 * x[0])))
 volt = Constant(model.mesh_data.mesh, default_real_type(phi_i))
-def flux_e(fields):
+def flux_e(fields): # Requires fields: T, ge, op
     return n_ref * mob / (nitsche_eps * l_bc) * (fields["T"] * fields["ge"] + vo2.charge_gap(fields["op"]) / 2.0)
-def flux_h(fields):
+def flux_h(fields): # Requires fields: T, gh, op
     return n_ref * mob / (nitsche_eps * l_bc) * (fields["T"] * fields["gh"] + vo2.charge_gap(fields["op"]) / 2.0)
-def T_flux(fields):
+def T_flux(fields): # Requires fields: T
     return h * (fields["T"] - T_i)
 bcs = [ # Uncomment the boundary conditions you want to apply
     ("u", bdr_tags["bottom"], u_bott), 
-   # ("phi", bdr_tags["front"], volt),
-   # ("ge", bdr_tags["left"], flux_e),
-   # ("gh", bdr_tags["left"], flux_h),
-   # ("ge", bdr_tags["right"], flux_e),
-   # ("gh", bdr_tags["right"], flux_h),
-   # ("T", bdr_tags["bottom"], T_flux)
+    ("phi", bdr_tags["front"], volt),
+    ("ge", bdr_tags["left"], flux_e),
+    ("gh", bdr_tags["left"], flux_h),
+    ("ge", bdr_tags["right"], flux_e),
+    ("gh", bdr_tags["right"], flux_h),
+    ("T", bdr_tags["bottom"], T_flux)
 ]
 model.set_bcs(bcs)
 
@@ -232,21 +232,21 @@ def gh0(x):
 Nc_i = 2.0 * (2.0 * np.pi * M_H2 * model.params["e_eff_mass"] * T_i) ** 1.5
 Nv_i = 2.0 * (2.0 * np.pi * M_H2 * model.params["h_eff_mass"] * T_i) ** 1.5
 def gdi0(x):
-    return np.log(model.params["d_max_density"] * model.params["d_valence"]
-                  / (Nc_i * f1_2(ge0(x), exp=np.exp) - Nv_i * f1_2(gh0(x), exp=np.exp))
-                  - np.exp(model.params["d_valence"] * (mu_e_i - model.params["d_elec_level"]) / T_i) - 1.0)
+    return -np.log(model.params["d_max_density"] * model.params["d_valence"]
+                   / (Nc_i * f1_2(ge0(x), exp=np.exp) - Nv_i * f1_2(gh0(x), exp=np.exp))
+                   - np.exp(model.params["d_valence"] * (mu_e_i - model.params["d_elec_level"]) / T_i) - 1.0)
 def gd0(x):
-    return gdi0(x) - model.params["d_valence"] * (mu_e_i - model.params["d_elec_level"]) / T_i
+    return gdi0(x) + model.params["d_valence"] * (mu_e_i - model.params["d_elec_level"]) / T_i
 def phi0(x):
     return np.full(x.shape[1], phi_i)
 
 ics = { # Uncomment the initial conditions you want to apply
     "op": op0,
     "u": u_bott,
-   # "phi": phi0,
-   # "T": T0,
-   # "ge": ge0,
-   # "gh": gh0,
+    "phi": phi0,
+    "T": T0,
+    "ge": ge0,
+    "gh": gh0,
     "gd": gd0,
     "gdi": gdi0
 }

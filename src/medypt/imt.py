@@ -31,10 +31,12 @@ class IMTModel(model.ModelBase):
       see note.
     * ``'phi'``: Electrical potential (scalar field)
     * ``'T'``: Temperature (scalar field)
-    * ``'j0'``: Helper constant field representing the *average* outward current density on the boundary tagged by 0. Boundary
+    * ``'gd'``: Reduced chemical potential for neutral defects (scalar field).
+    * ``'gdi'``: Reduced chemical potential for ionized defects (scalar field). Combined with ``'gd'`` to determine both neutral
+      and ionized defect density.
+    * ``'j0'``: Helper real-element field representing the *average* outward current density on the boundary tagged by 0. Boundary
       current is ``j0`` multiplied by the area of the boundary. If you need to use boundary current in defining 
-      your problem, make sure to tag the corresponding boundary with 0 in the mesh. This field only involves 
-      negligible overhead if not used.
+      your problem, make sure to tag the corresponding boundary with 0 in the mesh.
 
     Units used in this class are:
 
@@ -64,21 +66,23 @@ class IMTModel(model.ModelBase):
             "h_eff_mass": 1.0,
             "therm_expan_coeff": 0.1, # 1 / eV. Scalar: isotropic; 1D array-like: full vector in Voigt notation
             "therm_expan_Tref": 0.025, # eV
-            "op_relax_rate": 100.0, # nm^3 / (eV ns). Scalar: isotropic; 2D array-like: full tensor
+            "op_relax_rate_const": 100.0, # nm^3 / (eV ns). Scalar: isotropic; 2D array-like: full tensor
             "e_mobility": 5e4, # nm^2 / (V ns). Scalar: isotropic; 2D array-like: full tensor
             "h_mobility": 5e4,  # nm^2 / (V ns). Scalar: isotropic; 2D array-like: full tensor
-            "eh_recomb_rate": 0.1, # nm^3 / ns
+            "eh_recomb_rate_const": 0.1, # nm^3 / ns
             "back_diel_const": 10.0, # Scalar: isotropic; 2D array-like: full tensor
             "vol_heat_cap": 217.0, # nm^-3
             "therm_conduct": 4.3e5, # nm^-1 ns^-1. Scalar: isotropic; 2D array-like: full tensor
             "d_max_density": 10.0, # nm^-3
-            "d_neutral_diff_coeff": 1e-8, # nm^2 / ns. Scalar: isotropic; 2D array-like: full tensor
-            "d_ionized_diff_coeff": 1e-8, # nm^2 / ns. Scalar: isotropic; 2D array-like: full tensor
+            "d_neutral_max_diffus": 1e-8, # nm^2 / ns. Scalar: isotropic; 2D array-like: full tensor
+            "d_neutral_act_energy": 0.2, # eV
+            "d_ionized_max_diffus": 1e-8, # nm^2 / ns. Scalar: isotropic; 2D array-like: full tensor
+            "d_ionized_act_energy": 0.2, # eV
             "d_valence": 1,
             "d_elec_level": 0.2, # eV
             "d_neutral_volume": 0.01, # nm^3
             "d_ionized_volume": 0.02, # nm^3
-            "d_ionize_rate": 0.1,
+            "d_ionize_rate_const": 0.1,
         } # Physical parameter dictionary
         """A dictonary defining physical parameters. Contents include:
 
@@ -89,13 +93,23 @@ class IMTModel(model.ModelBase):
         * ``'therm_expan_coeff'`` (float | array-like, eV^-1): Thermal expansion coefficient. Scalar (isotropic) or 
           1D array-like (full vector in Voigt notation)
         * ``'therm_expan_Tref'`` (float, eV): Reference temperature for thermal expansion
-        * ``'op_relax_rate'`` (float | array-like, nm^3 / (eV ns)): Order-parameter relaxation rate. Scalar (isotropic) or 2D array-like (full tensor)
+        * ``'op_relax_rate_const'`` (float | array-like, nm^3 / (eV ns)): Order-parameter relaxation rate constant. Scalar (isotropic) or 2D array-like (full tensor)
         * ``'e_mobility'`` (float | array-like, nm^2 / (V ns)): Electron mobility. Scalar (isotropic) or 2D array-like (full tensor)
         * ``'h_mobility'`` (float | array-like, nm^2 / (V ns)): Hole mobility. Scalar (isotropic) or 2D array-like (full tensor)
-        * ``'eh_recomb_rate'`` (float, nm^3 / ns): Electron-hole recombination rate
+        * ``'eh_recomb_rate_const'`` (float, nm^3 / ns): Electron-hole recombination rate constant
         * ``'back_diel_const'`` (float | array-like, dimensionless): Background dielectric constant. Scalar (isotropic) or 2D array-like (full tensor)
         * ``'vol_heat_cap'`` (float, nm^-3): Volumetric heat capacity
         * ``'therm_conduct'`` (float | array-like, nm^-1 ns^-1): Thermal conductivity. Scalar (isotropic) or 2D array-like (full tensor)
+        * ``'d_max_density'`` (float, nm^-3): Maximum defect density
+        * ``'d_neutral_max_diffus'`` (float | array-like, nm^2 / ns): Maximum diffusivity for neutral defects. Scalar (isotropic) or 2D array-like (full tensor)
+        * ``'d_neutral_act_energy'`` (float, eV): Activation energy for neutral defect diffusion
+        * ``'d_ionized_max_diffus'`` (float | array-like, nm^2 / ns): Maximum diffusivity for ionized defects. Scalar (isotropic) or 2D array-like (full tensor)
+        * ``'d_ionized_act_energy'`` (float, eV): Activation energy for ionized defect diffusion
+        * ``'d_valence'`` (int, dimensionless): Valence of the defect
+        * ``'d_elec_level'`` (float, eV): Electronic level of the defect
+        * ``'d_neutral_volume'`` (float, nm^3): Volume change induced by one neutral defect
+        * ``'d_ionized_volume'`` (float, nm^3): Volume change induced by one ionized defect
+        * ``'d_ionize_rate_const'`` (float, nm^(3 * d_valence) / ns): Ionization rate constant of the defect
         """
 
     def load_physics(self, phys: Sequence[str], **kwargs: Any):
@@ -103,18 +117,29 @@ class IMTModel(model.ModelBase):
 
         :param phys: Sequence of strings specifying which physics components to load. Order does not matter. Possible values are:
 
-            * ``'op'``: Order parameter relaxation. Creates ``op`` field. Needs temperature, either by loading ``'T'`` 
-              or specifying a constant ``'temperature'`` in the :py:attr:`~medypt.imt.IMTModel.params` dict.
+            * ``'op'``: Order parameter relaxation. Creates ``op`` field. Needs 
+
+                * temperature: load ``'T'`` or pass a float to ``T`` in ``kwargs``.
+
             * ``'T'``: Heat conduction and generation. Creates ``T`` field.
             * ``'phi'``: Electrostatics. Creates ``phi`` field.
-            * ``'u'``: Mechanical equilibrium. Creates ``u`` field. Needs temperature, 
-              either by loading ``'T'`` or specifying a constant ``'temperature'`` in the :py:attr:`~medypt.imt.IMTModel.params` dict.
-            * ``'eh'``: Electron-hole transport and recombination. Creates ``ge`` and ``gh`` fields. Needs temperature, 
-              either by loading ``'T'`` or specifying a constant ``'temperature'`` in the :py:attr:`~medypt.imt.IMTModel.params` dict. 
-              Also need charge gap and gap center, either by loading 
-              ``'op'`` or specifying constant ``'charge_gap'`` and ``'gap_center'`` in the :py:attr:`~medypt.imt.IMTModel.params` dict.
-            * ``'j0'``: Provide average outward current density on boundary marked by 0. Creates ``j0`` field. 
-              Requires ``'eh'`` to be loaded.
+            * ``'u'``: Mechanical equilibrium. Creates ``u`` field. Needs
+
+                * temperature: load ``'T'`` or pass a float to ``T`` in ``kwargs``.
+
+            * ``'eh'``: Electron-hole transport and recombination. Creates ``ge`` and ``gh`` fields. Needs 
+            
+                * Temperature: load ``'T'`` or pass a float to ``T`` in ``kwargs``.
+                * Charge gap: load ``'op'`` and pass a callable to ``charge_gap`` in ``kwargs``; or pass a float 
+                  to ``charge_gap`` in ``kwargs``.
+                * Gap center: load ``'op'`` and pass a callable to ``gap_center`` in ``kwargs``; or pass a float 
+                  to ``gap_center`` in ``kwargs``.
+
+            * ``'d'``: Defect diffusion and ionization. Creates ``gd`` and ``gdi`` fields. Needs 
+
+                * temperature: load ``'T'`` or pass a float to ``T`` in ``kwargs``.
+
+            * ``'j0'``: Average outward current density on boundary tagged by 0. Creates ``j0`` field. Requires ``'eh'`` to be loaded.
 
             Coupling between different physics components will be automatically added when multiple components are loaded.
         :type phys: Sequence[str]
@@ -127,10 +152,12 @@ class IMTModel(model.ModelBase):
               ``'op'``.
             * ``trans_strn`` (Callable[[Any], Any]): Callable returning the eigenstrain in Voigt notation, with a calling 
               signature ``trans_strn(op)``. Required when loading ``'u'`` along with ``'op'``.
-            * ``charge_gap`` (Callable[[Any], Any]): Callable returning the energy gap, with a calling signature ``charge_gap(op)``.
-              Required when loading ``'eh'`` along with ``'op'``.
-            * ``gap_center`` (Callable[[Any], Any]): Callable returning the center of the gap measured from a fixed energy level 
-              (reference level), with a calling signature ``gap_center(op)``. Required when loading ``'eh'`` along with ``'op'``.
+            * ``charge_gap`` (Callable[[Any], Any] | float): Callable returning the energy gap with a calling signature 
+              ``charge_gap(op)``, required when loading ``'eh'`` along with ``'op'``; or a float, required when loading 
+              ``'eh'`` without loading ``'op'``.
+            * ``gap_center`` (Callable[[Any], Any] | float): Callable returning the center of the gap measured from a fixed energy level 
+              (reference level) with a calling signature ``gap_center(op)``, required when loading ``'eh'`` along with ``'op'``;
+              or a float, required when loading ``'eh'`` without loading ``'op'``.
 
         :type kwargs: dict[str, Any]
         :returns: ``None``
@@ -166,9 +193,10 @@ class IMTModel(model.ModelBase):
             self._fields_pre["T"] = fem.Function(FS, name="T_pre", dtype=default_real_type)
             self._test_funcs["T"] = ufl.TestFunction(FS)
 
-            therm_cond = self.params["therm_conduct"]
-            if isinstance(therm_cond, Sequence):
-                therm_cond = ufl.as_matrix(therm_cond)
+            therm_cond = (
+                self.params["therm_conduct"] if isinstance(self.params["therm_conduct"], (float, int)) 
+                else ufl.as_matrix(self.params["therm_conduct"])
+            )
 
             self._have_dt["T"] = True
 
@@ -199,10 +227,10 @@ class IMTModel(model.ModelBase):
             op = ufl.variable(self.fields["op"])
             dop = ufl.variable(ufl.grad(self.fields["op"]))
             f_in = kwargs["intrinsic_f"](T, op, dop)
-
-            op_rate = self.params["op_relax_rate"]
-            if isinstance(op_rate, Sequence):
-                op_rate = ufl.as_matrix(op_rate)
+            op_rate = (
+                self.params["op_relax_rate_const"] if isinstance(self.params["op_relax_rate_const"], (float, int))
+                else ufl.as_matrix(self.params["op_relax_rate_const"])
+            )
 
             self._have_dt["op"] = True
 
@@ -232,10 +260,10 @@ class IMTModel(model.ModelBase):
             self._fields_pre["phi"] = fem.Function(FS, name="phi_pre", dtype=default_real_type)
             self._test_funcs["phi"] = ufl.TestFunction(FS)
 
-            perm = self.params["back_diel_const"]
-            if isinstance(perm, Sequence):
-                perm = ufl.as_matrix(perm)
-            perm = perm * 0.05526349406 # e V^-1 nm^-1
+            perm = (
+                self.params["back_diel_const"] if isinstance(self.params["back_diel_const"], (float, int)) 
+                else ufl.as_matrix(self.params["back_diel_const"])
+            ) * 0.05526349406 # e V^-1 nm^-1
 
             self._have_dt["phi"] = False
 
@@ -290,16 +318,18 @@ class IMTModel(model.ModelBase):
             # of the energy gap.
             mu_in = E0 + 3.0 / 4.0 * T * np.log(self.params["h_eff_mass"] / self.params["e_eff_mass"])
             n_in = Nc * utils.f1_2((mu_in - Ee) / T)
-            mob_e = self.params["e_mobility"]
-            if isinstance(mob_e, Sequence):
-                mob_e = ufl.as_matrix(mob_e)
-            mob_h = self.params["h_mobility"]
-            if isinstance(mob_h, Sequence):
-                mob_h = ufl.as_matrix(mob_h)
+            mob_e = (
+                self.params["e_mobility"] if isinstance(self.params["e_mobility"], (float, int)) 
+                else ufl.as_matrix(self.params["e_mobility"])
+            )
+            mob_h = (
+                self.params["h_mobility"] if isinstance(self.params["h_mobility"], (float, int)) 
+                else ufl.as_matrix(self.params["h_mobility"])
+            )
             je = -n * mob_e * ufl.grad(self.fields["ge"] * T + Ee - phi)
             jh = -p * mob_h * ufl.grad(self.fields["gh"] * T + Eh + phi)
             # Recombination-generation term, which must be defined in terms of fugacity, not real densities
-            Reh = self.params["eh_recomb_rate"] * Nc * Nv * (ufl.exp(-Eg / T) - ufl.exp(self.fields["ge"] + self.fields["gh"]))
+            Reh = self.params["eh_recomb_rate_const"] * Nc * Nv * (ufl.exp(-Eg / T) - ufl.exp(self.fields["ge"] + self.fields["gh"]))
 
             self._have_dt["ge"] = True
             self._have_dt["gh"] = True
@@ -385,12 +415,16 @@ class IMTModel(model.ModelBase):
             _nd = utils.d_density(self._fields_pre["gd"], self._fields_pre["gdi"], self.params["d_max_density"])
             ndi = utils.d_density(self.fields["gdi"], self.fields["gd"], self.params["d_max_density"])
             _ndi = utils.d_density(self._fields_pre["gdi"], self._fields_pre["gd"], self.params["d_max_density"])
-            D = self.params["d_neutral_diff_coeff"]
-            if isinstance(D, Sequence):
-                D = ufl.as_matrix(D)
-            Di = self.params["d_ionized_diff_coeff"]
-            if isinstance(Di, Sequence):
-                Di = ufl.as_matrix(Di)
+            D = (
+                self.params["d_neutral_max_diffus"] * ufl.exp(-self.params["d_neutral_act_energy"] / T)
+                if isinstance(self.params["d_neutral_max_diffus"], (int, float))
+                else ufl.as_matrix(self.params["d_neutral_max_diffus"]) * ufl.exp(-self.params["d_neutral_act_energy"] / T)
+            )
+            Di = (
+                self.params["d_ionized_max_diffus"] * ufl.exp(-self.params["d_ionized_act_energy"] / T)
+                if isinstance(self.params["d_ionized_max_diffus"], (int, float))
+                else ufl.as_matrix(self.params["d_ionized_max_diffus"]) * ufl.exp(-self.params["d_ionized_act_energy"] / T)
+            )
             jd = -nd * D / T * ufl.grad(self.fields["gd"] * T)
             jdi = -ndi * Di / T * ufl.grad(self.fields["gdi"] * T + self.params["d_valence"] * phi)
 
@@ -413,11 +447,11 @@ class IMTModel(model.ModelBase):
                 Kd = Nc ** abs(self.params["d_valence"]) * ufl.exp((self.params["d_valence"] * self.params["d_elec_level"] 
                                                                     - abs(self.params["d_valence"]) * Ee) / T)
                 if self.params["d_valence"] > 0:  # Defects are donors, which react primarily with free electrons
-                    Rd = self.params["d_ionize_rate"] * (Kd * nd - ndi * Nc ** self.params["d_valence"] 
+                    Rd = self.params["d_ionize_rate_const"] * (Kd * nd - ndi * Nc ** self.params["d_valence"] 
                                                          * ufl.exp(self.params["d_valence"] * self.fields["ge"]))
                     self._weak_forms["ge"] -= self._dt * Rd * self._test_funcs["ge"] * dx
                 else:  # Defects are acceptors, which react primarily with free holes
-                    Rd = self.params["d_ionize_rate"] * (Kd * nd - ndi * Nv ** (-self.params["d_valence"])
+                    Rd = self.params["d_ionize_rate_const"] * (Kd * nd - ndi * Nv ** (-self.params["d_valence"])
                                                          * ufl.exp(-self.params["d_valence"] * self.fields["gh"]))
                     self._weak_forms["gh"] -= self._dt * Rd * self._test_funcs["gh"] * dx
                 self._weak_forms["gd"] += self._dt * Rd * self._test_funcs["gd"] * dx
@@ -444,14 +478,15 @@ class IMTModel(model.ModelBase):
                 if has_d else ufl.zero(mesh_dim * (mesh_dim + 1) // 2)
             )
 
-            stiff = self.params["stiffness"]
-            if len(stiff) == 2:
-                stiff = utils.young_poisson2stiffness(*stiff, dim=mesh_dim)
-            stiff = ufl.as_matrix(stiff)
-            therm_expan = self.params["therm_expan_coeff"]
-            if isinstance(therm_expan, (int, float)):
-                therm_expan = [therm_expan] * mesh_dim + [0.0] * (mesh_dim * (mesh_dim - 1) // 2)
-            therm_expan = ufl.as_vector(therm_expan)
+            stiff = ufl.as_matrix(
+                utils.young_poisson2stiffness(*self.params["stiffness"], dim=mesh_dim) if len(self.params["stiffness"]) == 2
+                else self.params["stiffness"]
+            )
+            therm_expan = ufl.as_vector(
+                [self.params["therm_expan_coeff"]] * mesh_dim + [0.0] * (mesh_dim * (mesh_dim - 1) // 2)
+                if isinstance(self.params["therm_expan_coeff"], (int, float))
+                else self.params["therm_expan_coeff"]
+            )
             strain = utils.ufl_mat2voigt4strain(ufl.sym(ufl.grad(self.fields["u"])))
             e_therm = therm_expan * (T - self.params["therm_expan_Tref"])
             e_elast = strain - e_therm - e0 - ed
@@ -471,9 +506,11 @@ class IMTModel(model.ModelBase):
                     self._test_funcs["op"]
                 ) * dx
             if has_d:
-                self._weak_forms["gd"] -= self._dt * ufl.dot(nd * D / T * ufl.grad(self.params["d_neutral_volume"] * utils.ufl_tr_voigt(stress)),
+                self._weak_forms["gd"] -= self._dt * ufl.dot(nd * D / T * self.params["d_neutral_volume"] 
+                                                             * ufl.grad(utils.ufl_tr_voigt(stress)), # Produces Wunused-variable warning but is the correct expression
                                                              ufl.grad(self._test_funcs["gd"])) * dx
-                self._weak_forms["gdi"] -= self._dt * ufl.dot(ndi * Di / T * ufl.grad(self.params["d_ionized_volume"] * utils.ufl_tr_voigt(stress)),
+                self._weak_forms["gdi"] -= self._dt * ufl.dot(ndi * Di / T * self.params["d_ionized_volume"] 
+                                                              * ufl.grad(utils.ufl_tr_voigt(stress)), # Produces Wunused-variable warning but is the correct expression
                                                               ufl.grad(self._test_funcs["gdi"])) * dx
 
             # Define von Mises stress for monitoring
