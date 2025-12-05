@@ -258,10 +258,10 @@ def relativeL2error(
     
     :param u1: First DOLFINx Function(s). Also used as the reference for computing the relative error. Iteration
         is performed over ``u1``.
-    :type u1: fem.Function | Iterable[fem.Function] | dict[str, fem.Function]
+    :type u1: fem.Function | Sequence[fem.Function] | dict[str, fem.Function]
     :param u2: Second DOLFINx Function(s). Must have the same type as ``u1``. Can have more items than ``u1`` and 
         only the items corresponding to those of ``u1`` are used.
-    :type u2: fem.Function | Iterable[fem.Function] | dict[str, fem.Function]
+    :type u2: fem.Function | Sequence[fem.Function] | dict[str, fem.Function]
     :param eps: Small value to avoid division by zero.
     :type eps: float
     :returns: Relative L2 error between ``u1`` and ``u2``.
