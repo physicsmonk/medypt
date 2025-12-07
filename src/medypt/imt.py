@@ -15,7 +15,7 @@ from mpi4py import MPI
 
 from . import model
 from . import utils
-from .maters import M_H2
+from .maters import M_H2, EPS0
 
 
 class IMTModel(model.ModelBase):
@@ -158,6 +158,10 @@ class IMTModel(model.ModelBase):
             * ``gap_center`` (Callable[[Any], Any] | float): Callable returning the center of the gap measured from a fixed energy level 
               (reference level) with a calling signature ``gap_center(op)``, required when loading ``'eh'`` along with ``'op'``;
               or a float, required when loading ``'eh'`` without loading ``'op'``.
+            * ``light_intens`` (:py:class:`dolfinx.fem.Function` | :py:class:`dolfinx.fem.Constant` | float): Light intensity field
+              in unit of eV / (nm^2 ns). Optional when loading ``'eh'``.
+            * ``light_freq`` (float): Light frequency (multiplied by h) in unit of eV. Optional when loading ``'eh'``. Must be provided
+              together with ``light_intens`` to enable photoexcitation.
 
         :type kwargs: dict[str, Any]
         :returns: ``None``
@@ -263,7 +267,7 @@ class IMTModel(model.ModelBase):
             perm = (
                 self.params["back_diel_const"] if isinstance(self.params["back_diel_const"], (float, int)) 
                 else ufl.as_matrix(self.params["back_diel_const"])
-            ) * 0.05526349406 # e V^-1 nm^-1
+            ) * EPS0
 
             self._have_dt["phi"] = False
 
@@ -330,16 +334,27 @@ class IMTModel(model.ModelBase):
             jh = -p * mob_h * ufl.grad(self.fields["gh"] * T + Eh + phi)
             # Recombination-generation term, which must be defined in terms of fugacity, not real densities
             Reh = self.params["eh_recomb_rate_const"] * Nc * Nv * (ufl.exp(-Eg / T) - ufl.exp(self.fields["ge"] + self.fields["gh"]))
+            if "light_intens" in kwargs and "light_freq" in kwargs:
+                cm_hbar = 2.58960507e3  # speed of light * electron mass / hbar in unit of nm^-1
+                Geh = (
+                    np.sqrt(2.0 * np.pi) * (1.0 + 1.0 / self.params["h_eff_mass"]) * Nv * Eg * kwargs["light_intens"] 
+                    / (EPS0 * cm_hbar * kwargs["light_freq"] * kwargs["light_freq"] * T) 
+                    * ufl.conditional(ufl.gt(kwargs["light_freq"], Eg), ufl.sqrt((kwargs["light_freq"] - Eg) / T), 0.0)
+                    / ( (1.0 + ufl.exp(self.fields["gh"] + (Eg / 2.0 + phi - kwargs["light_freq"] / 2.0) / T))
+                        * (1.0 + ufl.exp(self.fields["ge"] + (Eg / 2.0 - phi - kwargs["light_freq"] / 2.0) / T)) )
+                )
+            else:
+                Geh = 0.0
 
             self._have_dt["ge"] = True
             self._have_dt["gh"] = True
 
             self._weak_forms["ge"] = (
-                (n - _n - self._dt * Reh) * self._test_funcs["ge"] * dx 
+                (n - _n - self._dt * (Reh + Geh)) * self._test_funcs["ge"] * dx 
                 - self._dt * ufl.inner(je, ufl.grad(self._test_funcs["ge"])) * dx
             )
             self._weak_forms["gh"] = (
-                (p - _p - self._dt * Reh) * self._test_funcs["gh"] * dx 
+                (p - _p - self._dt * (Reh + Geh)) * self._test_funcs["gh"] * dx 
                 - self._dt * ufl.inner(jh, ufl.grad(self._test_funcs["gh"])) * dx
             )
 
@@ -361,8 +376,8 @@ class IMTModel(model.ModelBase):
                     self._dt * ufl.inner(jh - je, ufl.inv(n * mob_e + p * mob_h) * (jh - je)) * self._test_funcs["T"] * dx
                 )
 
-            self._exprs2save["n"] = (n, self.fields["ge"].function_space)
-            self._exprs2save["p"] = (p, self.fields["gh"].function_space)
+            self._exprs2save["n"] = (fem.Expression(n, FS_e.element.interpolation_points), FS_e)
+            self._exprs2save["p"] = (fem.Expression(p, FS_h.element.interpolation_points), FS_h)
             self._monitor["n_avg"] = fem.form(n / vol * dx)
             self._monitor["p_avg"] = fem.form(p / vol * dx)
 
@@ -457,8 +472,8 @@ class IMTModel(model.ModelBase):
                 self._weak_forms["gd"] += self._dt * Rd * self._test_funcs["gd"] * dx
                 self._weak_forms["gdi"] -= self._dt * Rd * self._test_funcs["gdi"] * dx
 
-            self._exprs2save["nd"] = (nd, self.fields["gd"].function_space)
-            self._exprs2save["ndi"] = (ndi, self.fields["gdi"].function_space)
+            self._exprs2save["nd"] = (fem.Expression(nd, FS.element.interpolation_points), FS)
+            self._exprs2save["ndi"] = (fem.Expression(ndi, FS_i.element.interpolation_points), FS_i)
             self._monitor["nd_avg"] = fem.form(nd / vol * dx)
             self._monitor["ndi_avg"] = fem.form(ndi / vol * dx)
 
@@ -528,7 +543,7 @@ class IMTModel(model.ModelBase):
                 self.mesh_data.mesh,
                 element("CG", self.mesh_data.mesh.basix_cell(), 1, dtype=default_real_type)
             )
-            self._exprs2save["vMs"] = (stress_vM, FS_scal) 
+            self._exprs2save["vMs"] = (fem.Expression(stress_vM, FS_scal.element.interpolation_points), FS_scal) 
             self._monitor["vMs_avg"] = fem.form(stress_vM / vol * dx)
 
         

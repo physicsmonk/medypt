@@ -22,7 +22,7 @@ from dolfinx.io.gmsh import MeshData
 from dolfinx.io import XDMFFile, VTXWriter
 from dolfinx.fem.petsc import NonlinearProblem
 
-from .utils import create_mesh, relativeL2error, TMat, gen_therm_noise
+from .utils import create_mesh, L2RError, TMat, gen_therm_noise
 
 class ModelBase:
     """Base class for phase-field models."""
@@ -73,7 +73,7 @@ class ModelBase:
     _weak_forms: dict[str, Integral] 
     """Blocked weak form. Each entry corresponds to a field equation."""
     _problem: NonlinearProblem
-    _exprs2save: dict[str, str | tuple[Expr, fem.FunctionSpace]]
+    _exprs2save: dict[str, str | tuple[fem.Expression, fem.FunctionSpace]]
     _monitor: dict[str, fem.Form]
 
     def __init__(self):
@@ -257,6 +257,7 @@ class ModelBase:
             if has_dt:  # Only for equations with time derivative terms
                 u2acc[name] = fem.Function(self.fields[name].function_space, name=f"{name}_2acc", dtype=default_real_type)
                 dudt_pre[name] = fem.Function(self.fields[name].function_space, name=f"d{name}_dt_pre", dtype=default_real_type)
+        error = L2RError(u2acc, self.fields)
         log_file = open(self.opts["log_file_name"], 'w')
         folder = Path(self.opts["sol_file_name"])
         use_xdmf = (folder.suffix == ".xdmf")
@@ -284,7 +285,7 @@ class ModelBase:
             self._noise.x.array[:] = 0.0
 
         # Prepare Function objects for saving the solution
-        compiled_sols = {}
+        # compiled_sols = {}
         funcs2save = {}  # Dictionary containing Functions for saving algebraic expressions of dolfinx Functions
         for key, expr in self._exprs2save.items():
             if isinstance(expr, str):  
@@ -294,9 +295,9 @@ class ModelBase:
                 # sols2save[key] = Projector(self.func2save[key][1], petsc_options=self.options["proj_petsc_opt"], metadata=self.options["proj_metadata"])  
                 # u4save = sols2save[key].project(self.func2save[key][0])  # Returns the Function object stored in the Projector object
                 # u4save.name = key
-                compiled_sols[key] = fem.Expression(expr[0], expr[1].element.interpolation_points)
+                # compiled_sols[key] = fem.Expression(expr[0], expr[1].element.interpolation_points)
                 funcs2save[key] = fem.Function(expr[1], name=key, dtype=default_real_type) # Create a new Function object for saving
-                funcs2save[key].interpolate(compiled_sols[key]) # Interpolation does not have the overshoot issue
+                funcs2save[key].interpolate(expr[0]) # Interpolation does not have the overshoot issue
                 # if key == self.options["sol_to_plot"]:  # This is the only case where sol2plot is needed
                 #     sol2plot = u4save  # This stores a reference to the Function object in the proper Projector object
             # funcs2save[key].name = key
@@ -427,7 +428,7 @@ class ModelBase:
                                                           + self.fields[name].x.array - self._fields_pre[name].x.array) * 0.5
                     )
                 # Calculate the backward Euler time integration error and time step changing factor
-                rel_err = relativeL2error(u2acc, self.fields, eps=eps)  # Only taking into account fields with time derivative terms in their equations
+                rel_err = error.compute(eps)  # Only taking into account fields with time derivative terms in their equations
                 dt_factor = min(max(self.opts["dt_reducer"] * np.sqrt(self.opts["t_step_rtol"] / max(rel_err, eps)), 
                                     self.opts["dt_min_rescalar"]), self.opts["dt_max_rescalar"])
                 if rel_err > self.opts["t_step_rtol"]:
@@ -452,7 +453,7 @@ class ModelBase:
                 for key, expr in self._exprs2save.items():
                     if isinstance(expr, tuple):
                         # u4save = sols2save[key].project(self.func2save[key][0])  # Name already set in Projector
-                        funcs2save[key].interpolate(compiled_sols[key])
+                        funcs2save[key].interpolate(expr[0])
                     if use_xdmf:
                         sol_file.write_function(funcs2save[key], t)
                     else:

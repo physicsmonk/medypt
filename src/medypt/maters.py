@@ -6,6 +6,9 @@ KB_E = 8.61733326e-5
 M_H2 = 0.332420142 
 """m / h^2 in unit of eV^-1 nm^-2"""
 
+EPS0 = 0.05526349406 
+"""Vacuum permittivity in unit of e V^-1 nm^-1"""
+
 class VO2:
     """Class defining required callables (see :py:meth:`~medypt.model.ModelBase.create_problem`) for the material VO2.
     """

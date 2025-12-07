@@ -184,14 +184,16 @@ model.load_physics(
         "eh", 
         "phi",
        # "j0",
-        "d"
+        "d",
     ], 
     op_dim=8, 
     T = T_i,
     intrinsic_f=vo2.intrinsic_f, 
     charge_gap=vo2.charge_gap,
     trans_strn=vo2.trans_strn, 
-    gap_center=lambda op: 0.0
+    gap_center=lambda op: 0.0,
+    light_intens=10.0,
+    light_freq=1.55,
 )
 
 #--------- Set boundary conditions ---------
@@ -248,7 +250,7 @@ ics = { # Uncomment the initial conditions you want to apply
     "ge": ge0,
     "gh": gh0,
     "gd": gd0,
-    "gdi": gdi0
+    "gdi": gdi0,
 }
 
 model.solve(tspan, dt, ics)

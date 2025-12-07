@@ -249,50 +249,124 @@ def ufl_tr_voigt(a: Expr) -> Expr:
     else:
         raise ValueError("[tr_voigt] Input matrix in Voigt notation must be of shape (1,), (3,), or (6,).")
 
-def relativeL2error(
-        u1: fem.Function | Sequence[fem.Function] | dict[str, fem.Function], 
-        u2: fem.Function | Sequence[fem.Function] | dict[str, fem.Function], 
-        eps: float = 1e-10
-    ) -> float:
-    """Calculate and return the relative L2 error between two DOLFINx Functions.
+# def relativeL2error(
+#         u1: fem.Function | Sequence[fem.Function] | dict[str, fem.Function], 
+#         u2: fem.Function | Sequence[fem.Function] | dict[str, fem.Function], 
+#         eps: float = 1e-10
+#     ) -> float:
+#     """Calculate and return the relative L2 error between two DOLFINx Functions.
     
-    :param u1: First DOLFINx Function(s). Also used as the reference for computing the relative error. Iteration
-        is performed over ``u1``.
-    :type u1: fem.Function | Sequence[fem.Function] | dict[str, fem.Function]
-    :param u2: Second DOLFINx Function(s). Must have the same type as ``u1``. Can have more items than ``u1`` and 
-        only the items corresponding to those of ``u1`` are used.
-    :type u2: fem.Function | Sequence[fem.Function] | dict[str, fem.Function]
-    :param eps: Small value to avoid division by zero.
-    :type eps: float
-    :returns: Relative L2 error between ``u1`` and ``u2``.
-    :rtype: float
-    """
-    err = 0.0
-    if isinstance(u1, dict) and isinstance(u2, dict):
-        for name, u in u1.items():
-            du = u - u2[name]
-            l2_diff = u.function_space.mesh.comm.allreduce(fem.assemble_scalar(fem.form(ufl.dot(du, du) * ufl.dx)), op=MPI.SUM)
-            l2_u1 = u.function_space.mesh.comm.allreduce(fem.assemble_scalar(fem.form(ufl.dot(u, u) * ufl.dx)), op=MPI.SUM)
-            err += l2_diff / (l2_u1 + eps)
-        n_subspaces = len(u1)
-    elif isinstance(u1, Sequence) and isinstance(u2, Sequence):
-        for i, u in enumerate(u1):
-            du = u - u2[i]
-            l2_diff = u.function_space.mesh.comm.allreduce(fem.assemble_scalar(fem.form(ufl.dot(du, du) * ufl.dx)), op=MPI.SUM)
-            l2_u1 = u.function_space.mesh.comm.allreduce(fem.assemble_scalar(fem.form(ufl.dot(u, u) * ufl.dx)), op=MPI.SUM)
-            err += l2_diff / (l2_u1 + eps)
-        n_subspaces = len(u1)
-    elif isinstance(u1, fem.Function) and isinstance(u2, fem.Function):
-        n_subspaces = u1.function_space.num_sub_spaces
-        for i in range(n_subspaces):
-            u1i = u1.sub(i)
-            du = u1i - u2.sub(i)
-            l2_diff = u1.function_space.mesh.comm.allreduce(fem.assemble_scalar(fem.form(ufl.dot(du, du) * ufl.dx)), op=MPI.SUM)
-            l2_u1 = u1.function_space.mesh.comm.allreduce(fem.assemble_scalar(fem.form(ufl.dot(u1i, u1i) * ufl.dx)), op=MPI.SUM)
-            err += l2_diff / (l2_u1 + eps)
-    else:
-        raise TypeError("[relativeL2error] u1 and u2 must be both fem.Function or both tuple of fem.Function.")
-    return np.sqrt(err / n_subspaces)
+#     :param u1: First DOLFINx Function(s). Also used as the reference for computing the relative error. Iteration
+#         is performed over ``u1``.
+#     :type u1: fem.Function | Sequence[fem.Function] | dict[str, fem.Function]
+#     :param u2: Second DOLFINx Function(s). Must have the same type as ``u1``. Can have more items than ``u1`` and 
+#         only the items corresponding to those of ``u1`` are used.
+#     :type u2: fem.Function | Sequence[fem.Function] | dict[str, fem.Function]
+#     :param eps: Small value to avoid division by zero.
+#     :type eps: float
+#     :returns: Relative L2 error between ``u1`` and ``u2``.
+#     :rtype: float
+#     """
+#     err = 0.0
+#     if isinstance(u1, dict) and isinstance(u2, dict):
+#         for name, u in u1.items():
+#             du = u - u2[name]
+#             l2_diff = u.function_space.mesh.comm.allreduce(fem.assemble_scalar(fem.form(ufl.dot(du, du) * ufl.dx)), op=MPI.SUM)
+#             l2_u1 = u.function_space.mesh.comm.allreduce(fem.assemble_scalar(fem.form(ufl.dot(u, u) * ufl.dx)), op=MPI.SUM)
+#             err += l2_diff / (l2_u1 + eps)
+#         n_subspaces = len(u1)
+#     elif isinstance(u1, Sequence) and isinstance(u2, Sequence):
+#         for i, u in enumerate(u1):
+#             du = u - u2[i]
+#             l2_diff = u.function_space.mesh.comm.allreduce(fem.assemble_scalar(fem.form(ufl.dot(du, du) * ufl.dx)), op=MPI.SUM)
+#             l2_u1 = u.function_space.mesh.comm.allreduce(fem.assemble_scalar(fem.form(ufl.dot(u, u) * ufl.dx)), op=MPI.SUM)
+#             err += l2_diff / (l2_u1 + eps)
+#         n_subspaces = len(u1)
+#     elif isinstance(u1, fem.Function) and isinstance(u2, fem.Function):
+#         n_subspaces = u1.function_space.num_sub_spaces
+#         for i in range(n_subspaces):
+#             u1i = u1.sub(i)
+#             du = u1i - u2.sub(i)
+#             l2_diff = u1.function_space.mesh.comm.allreduce(fem.assemble_scalar(fem.form(ufl.dot(du, du) * ufl.dx)), op=MPI.SUM)
+#             l2_u1 = u1.function_space.mesh.comm.allreduce(fem.assemble_scalar(fem.form(ufl.dot(u1i, u1i) * ufl.dx)), op=MPI.SUM)
+#             err += l2_diff / (l2_u1 + eps)
+#     else:
+#         raise TypeError("[relativeL2error] u1 and u2 must be both fem.Function or both tuple of fem.Function.")
+#     return np.sqrt(err / n_subspaces)
+
+class L2RError:
+    """Class for computing L2 relative error between two sets of DOLFINx Functions."""
+    _comm: MPI.Comm
+    _compiled_ref: dict[str, fem.Form]
+    _compiled_du: dict[str, fem.Form]
+
+    def __init__(
+            self, 
+            ref: dict[str, fem.Function], 
+            u: dict[str, fem.Function],
+            jit_options: Optional[dict] = None,
+            form_compiler_options: Optional[dict] = None,
+            metadata: Optional[dict] = None,
+        ):
+        """Initialize the L2RError object by compiling forms for computing L2 relative error.
+
+        :param ref: Reference DOLFINx Functions.
+        :type ref: dict[str, fem.Function]
+        :param u: DOLFINx Functions to compare against the reference. Only takes into account the items with the same keys as in ``ref``.
+        :type u: dict[str, fem.Function]
+        :param jit_options: Options to pass to just in time compiler
+        :type jit_options: Optional[dict]
+        :param form_compiler_options: Options to pass to the form compiler
+        :type form_compiler_options: Optional[dict]
+        :param metadata: Data to pass to the integration measure
+        :type metadata: Optional[dict]
+        """
+        self.setup(ref, u, jit_options=jit_options, form_compiler_options=form_compiler_options, metadata=metadata)
+
+    def setup(
+            self, 
+            ref: dict[str, fem.Function], 
+            u: dict[str, fem.Function],
+            jit_options: Optional[dict] = None,
+            form_compiler_options: Optional[dict] = None,
+            metadata: Optional[dict] = None,
+        ):
+        """Compile forms for computing L2 relative error.
+        
+        :param ref: Reference DOLFINx Functions.
+        :type ref: dict[str, fem.Function]
+        :param u: DOLFINx Functions to compare against the reference. Only takes into account the items with the same keys as in ``ref``.
+        :type u: dict[str, fem.Function]
+        :param jit_options: Options to pass to just in time compiler
+        :type jit_options: Optional[dict]
+        :param form_compiler_options: Options to pass to the form compiler
+        :type form_compiler_options: Optional[dict]
+        :param metadata: Data to pass to the integration measure
+        :type metadata: Optional[dict]
+        """
+        self._comm = next(iter(ref.values())).function_space.mesh.comm
+        self._compiled_ref = {}
+        self._compiled_du = {}
+        for name, f in ref.items():
+            dx = ufl.Measure("dx", domain=f.function_space.mesh, metadata=metadata)
+            self._compiled_ref[name] = fem.form(ufl.inner(f, f) * dx, jit_options=jit_options, form_compiler_options=form_compiler_options)
+            du = u[name] - f
+            self._compiled_du[name] = fem.form(ufl.inner(du, du) * dx, jit_options=jit_options, form_compiler_options=form_compiler_options)
+
+    def compute(self, eps: float = 1e-10) -> float:
+        """Compute the L2 relative error between the two attached sets of DOLFINx Functions.
+
+        :param eps: Small value to avoid division by zero.
+        :type eps: float
+        :returns: L2 relative error.
+        :rtype: float
+        """
+        err = 0.0
+        for name, form in self._compiled_ref.items():
+            l2_du = self._comm.allreduce(fem.assemble_scalar(self._compiled_du[name]), op=MPI.SUM)
+            l2_ref = self._comm.allreduce(fem.assemble_scalar(form), op=MPI.SUM)
+            err += l2_du / (l2_ref + eps)
+        return np.sqrt(err / len(self._compiled_ref))
 
 class Projector:
     """Projector for a given function.
