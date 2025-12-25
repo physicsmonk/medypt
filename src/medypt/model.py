@@ -216,6 +216,10 @@ class ModelBase:
         ) -> bool:
         """Solve the time-dependent finite-element problem.
 
+        It uses adapative backward Euler time stepping algorithm for time integration. The time step is automatically controlled
+        by the time discretization error specified in :py:attr:`~medypt.model.ModelBase.opts`. The advantage of backward Euler 
+        algorithm is its stability.
+
         :param tspan: Time span to solve over.
         :type tspan: float
         :param dt: Initial time step. Defaults to ``None`` to use the current time step.
