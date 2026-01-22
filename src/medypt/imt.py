@@ -140,6 +140,8 @@ class IMTModel(model.ModelBase):
                 * temperature: load ``'T'`` or pass a float to ``T`` in ``kwargs``.
 
             * ``'j0'``: Average outward current density on boundary tagged by 0. Creates ``j0`` field. Requires ``'eh'`` to be loaded.
+            * ``'lambda'``: Lagrange multiplier for fixing average electrical potential to zero. Creates ``lambda`` field. 
+              Requires ``'phi'`` to be loaded.
 
             Coupling between different physics components will be automatically added when multiple components are loaded.
         :type phys: Sequence[str]
@@ -186,6 +188,7 @@ class IMTModel(model.ModelBase):
         has_op = ("op" in phys)
         has_u = ("u" in phys)
         has_phi = ("phi" in phys)
+        has_lambda = ("lambda" in phys)
         has_eh = ("eh" in phys)
         has_j0 = ("j0" in phys)
         has_d = ("d" in phys)
@@ -223,7 +226,6 @@ class IMTModel(model.ModelBase):
             self.fields["op"] = fem.Function(FS, name="op", dtype=default_real_type)
             self._fields_pre["op"] = fem.Function(FS, name="op_pre", dtype=default_real_type)
             self._test_funcs["op"] = ufl.TestFunction(FS)
-            self._noise = fem.Function(FS, name="noise", dtype=default_real_type)
 
             # Not using dict.get(key, default) because default will be evaluate regardless of whether dict has key
             T = self.fields["T"] if has_T else kwargs["T"]
@@ -239,10 +241,12 @@ class IMTModel(model.ModelBase):
             self._have_dt["op"] = True
 
             self._weak_forms["op"] = (
-                ufl.inner(op - self._fields_pre["op"] + self._dt * op_rate * ufl.diff(f_in, op) 
-                          - ufl.sqrt(self._dt) * self._noise, self._test_funcs["op"]) * dx 
+                ufl.inner(op - self._fields_pre["op"] + self._dt * op_rate * ufl.diff(f_in, op), self._test_funcs["op"]) * dx 
                 + self._dt * ufl.inner(ufl.diff(f_in, dop), ufl.grad(self._test_funcs["op"])) * dx
             )
+            if self.opts["has_thermal_noise"]:
+                self._noise = fem.Function(FS, name="noise", dtype=default_real_type)
+                self._weak_forms["op"] -= ufl.inner(ufl.sqrt(self._dt) * self._noise, self._test_funcs["op"]) * dx
 
             # Add coupling terms for previously defined physics components
             if has_T:
@@ -271,12 +275,32 @@ class IMTModel(model.ModelBase):
 
             self._have_dt["phi"] = False
 
+            # x = ufl.SpatialCoordinate(self.mesh_data.mesh)  # For testing purpose only; remove later
+
             self._weak_forms["phi"] = (
                 ufl.inner(perm * ufl.grad(self.fields["phi"]), ufl.grad(self._test_funcs["phi"])) * dx
+                # + (0.3 * x[1] + ufl.sin(2.0 * ufl.pi * x[0])) * self._test_funcs["phi"] * dx  # For testing purpose only; remove later
             )
 
             self._exprs2save["phi"] = "phi"
-        
+
+        if has_lambda:
+            if not has_phi:
+                raise ValueError("[IMTModel.load_physics] 'phi' must be loaded for loading 'lambda'.")
+            
+            # Create real function space, which contains only one real number uniform across the mesh.
+            # It must be handled separately from the mixed function space.
+            # See https://github.com/scientificcomputing/scifem/blob/main/examples/real_function_space.py
+            FS = create_real_functionspace(self.mesh_data.mesh)
+            self.fields["lambda"] = fem.Function(FS, name="lambda", dtype=default_real_type)
+            self._fields_pre["lambda"] = fem.Function(FS, name="lambda_pre", dtype=default_real_type)
+            self._test_funcs["lambda"] = ufl.TestFunction(FS)
+
+            self._have_dt["lambda"] = False
+
+            self._weak_forms["lambda"] = self.fields["phi"] * self._test_funcs["lambda"] * dx
+            self._weak_forms["phi"] += self.fields["lambda"] * self._test_funcs["phi"] * dx
+
         if has_eh:
             # if "charge_gap" not in kwargs:
             #     raise ValueError("[IMTModel.load_physics] 'charge_gap' must be specified using a keyword argument when loading `eh`.")
