@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "medypt"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
     "fenics-dolfinx == 0.10.0",
     "fenics-basix == 0.10.0",
