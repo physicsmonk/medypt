@@ -281,8 +281,6 @@ class ModelBase:
                 dissipU = np.sqrt(self.params["op_relax_rate"])
             rng = default_rng([p_rank, self.opts["rand_seed"]])  # Safe independent spawn of RNGs for parallel runs
             gen_therm_noise(Tmat, dissipU, rng, self._noise)
-        else:
-            self._noise.x.array[:] = 0.0
 
         # Prepare Function objects for saving the solution
         # compiled_sols = {}
