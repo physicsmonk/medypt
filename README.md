@@ -6,3 +6,6 @@ It relies on the Python interface of [FEniCSx](https://fenicsproject.org/) to so
 and is itself a pure Python package, so it is very easy to install on any platform.
 
 For details, see its [documentation](https://medypt.readthedocs.io/en/latest/index.html).
+
+### Credits
+- Yin Shi, Insutitute of Physics, Chinese Academy of Sciences
